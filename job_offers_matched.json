@@ -1,0 +1,473 @@
+[
+  {
+    "offer_title": "Data Scientist Biology",
+    "company": "Indeed.com (probablement annonce relayée)",
+    "matching_score": 93.9,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Machine Learning",
+        "Python",
+        "SQL"
+      ],
+      "missing_skills": [
+        "Genomics",
+        "Biology",
+        "Experiment Design",
+        "R",
+        "Data Science",
+        "Clinical Data Analysis (si pertinent)",
+        "Drug Discovery (si pertinent)",
+        "Data Mining",
+        "Statistical Modeling",
+        "Bioinformatics"
+      ]
+    }
+  },
+  {
+    "offer_title": "Health Data Scientist",
+    "company": "Indeed.com (Indirect - Aggregator)",
+    "matching_score": 88.4,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 0.82,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Machine Learning",
+        "Python",
+        "SQL"
+      ],
+      "missing_skills": [
+        "Epidemiology (potentially)",
+        "Bioinformatics (potentially)",
+        "R",
+        "Healthcare Data Analysis",
+        "Data Mining",
+        "Statistical Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "Staff Data Scientist",
+    "company": "Indeed.com (Implicitement)",
+    "matching_score": 93.9,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Machine Learning",
+        "Python",
+        "SQL"
+      ],
+      "missing_skills": [
+        "Big Data Technologies (e.g., Spark, Hadoop)",
+        "Deep Learning (potentially)",
+        "R",
+        "Cloud Computing (e.g., AWS, Azure, GCP)",
+        "Data Science",
+        "Statistical Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "Research Scientist",
+    "company": "Kayrros",
+    "matching_score": 81.65,
+    "details": {
+      "skill_similarity": 0.82,
+      "soft_skill_similarity": 0.82,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Python",
+        "Machine Learning"
+      ],
+      "missing_skills": [
+        "Cloud Computing (AWS, GCP, Azure)",
+        "Deep Learning (TensorFlow, PyTorch)",
+        "Big Data Technologies (Spark, Hadoop)",
+        "Data Science",
+        "Statistical Modeling",
+        "R&D"
+      ]
+    }
+  },
+  {
+    "offer_title": "Data Scientist",
+    "company": "Indeed.com",
+    "matching_score": 93.9,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Machine Learning",
+        "Python",
+        "SQL"
+      ],
+      "missing_skills": [
+        "Big Data Technologies (e.g., Hadoop, Spark)",
+        "R",
+        "Cloud Computing (e.g., AWS, Azure, GCP)",
+        "Data Mining",
+        "Deep Learning",
+        "Statistical Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "AI Research Scientist",
+    "company": "Pigment (deduced from the mention of 'Data Scientist Internship. Pigment')",
+    "matching_score": 87.15,
+    "details": {
+      "skill_similarity": 0.82,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Python",
+        "Machine Learning"
+      ],
+      "missing_skills": [
+        "Deep Learning",
+        "Data Pipelines",
+        "Experiment Design",
+        "Artificial Intelligence (AI)",
+        "Cloud Computing (e.g., AWS, Azure, GCP)",
+        "Model Deployment",
+        "Evaluation Metrics",
+        "Statistical Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "AI Research Scientist",
+    "company": "Indeed.com (source de l'offre)",
+    "matching_score": 73.99,
+    "details": {
+      "skill_similarity": 0.71,
+      "soft_skill_similarity": 0.82,
+      "matched_skills": [
+        "Data Analysis"
+      ],
+      "missing_skills": [
+        "Model Evaluation",
+        "Machine Learning (ML)",
+        "Research Methodologies",
+        "Artificial Intelligence (AI)",
+        "Algorithm Development",
+        "TensorFlow/PyTorch/Keras (frameworks ML courants)",
+        "Python (probable, langage courant en IA)",
+        "Data Science",
+        "Experimentation",
+        "Deep Learning",
+        "Statistical Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "Actuarial Data Scientist",
+    "company": "Indeed.com",
+    "matching_score": 81.65,
+    "details": {
+      "skill_similarity": 0.82,
+      "soft_skill_similarity": 0.82,
+      "matched_skills": [
+        "Data Analysis",
+        "Python",
+        "Machine Learning",
+        "SQL"
+      ],
+      "missing_skills": [
+        "Data Science",
+        "Actuarial Science",
+        "R",
+        "Statistical Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "Internship Data Scientist",
+    "company": "Moody's",
+    "matching_score": 81.65,
+    "details": {
+      "skill_similarity": 0.82,
+      "soft_skill_similarity": 0.82,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Python",
+        "Machine Learning"
+      ],
+      "missing_skills": [
+        "Data Science",
+        "Explainability Tools",
+        "Data Mining",
+        "Statistical Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "AI Research Scientist",
+    "company": "Indeed.com (implicitement, mais cible probablement une entreprise cliente)",
+    "matching_score": 79.5,
+    "details": {
+      "skill_similarity": 0.71,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Analysis",
+        "Python",
+        "Machine Learning"
+      ],
+      "missing_skills": [
+        "Model Evaluation",
+        "Statistical Modeling",
+        "Algorithm Development",
+        "Experiment Design",
+        "Data Mining",
+        "Deep Learning",
+        "TensorFlow/PyTorch (Frameworks ML probables)"
+      ]
+    }
+  },
+  {
+    "offer_title": "Data Scientist",
+    "company": "Accelerator Data Science (via fr.indeed.com probablement)",
+    "matching_score": 93.9,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Machine Learning",
+        "Python",
+        "SQL"
+      ],
+      "missing_skills": [
+        "Big Data Technologies (e.g., Spark, Hadoop - probable)",
+        "R",
+        "Statistical Analysis",
+        "Cloud Computing (e.g., AWS, Azure, GCP - probable)",
+        "Data Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "Product Analytics - Data Scientist",
+    "company": "Indeed.com",
+    "matching_score": 88.4,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 0.82,
+      "matched_skills": [
+        "Python",
+        "SQL",
+        "Machine Learning",
+        "Statistics"
+      ],
+      "missing_skills": [
+        "Data Mining",
+        "Data Visualization (e.g., Tableau, Power BI)",
+        "R",
+        "Product Analytics",
+        "A/B Testing",
+        "Data Science",
+        "Data Modeling",
+        "Experimentation"
+      ]
+    }
+  },
+  {
+    "offer_title": "Senior Data Scientist, Research & Development",
+    "company": "Indeed",
+    "matching_score": 93.9,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Machine Learning",
+        "Python",
+        "SQL"
+      ],
+      "missing_skills": [
+        "Natural Language Processing (NLP)",
+        "Big Data Technologies (e.g., Spark, Hadoop)",
+        "R",
+        "Experiment Design",
+        "Cloud Computing (e.g., AWS, Azure, GCP)",
+        "A/B Testing",
+        "Data Mining",
+        "Deep Learning",
+        "Statistical Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "Data Cleaning",
+    "company": "fr.indeed.com",
+    "matching_score": 87.15,
+    "details": {
+      "skill_similarity": 0.82,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "SQL"
+      ],
+      "missing_skills": [
+        "Data validation",
+        "Data visualization",
+        "Data manipulation",
+        "Data cleaning",
+        "Python (pandas, numpy)",
+        "Data quality",
+        "Data analysis"
+      ]
+    }
+  },
+  {
+    "offer_title": "Strategy Consultant & Data Scientist - Internship",
+    "company": "fr.indeed.com",
+    "matching_score": 87.15,
+    "details": {
+      "skill_similarity": 0.82,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Analysis"
+      ],
+      "missing_skills": [
+        "Statistical Modeling",
+        "Competitive analysis",
+        "Machine Learning (potentially)",
+        "Market analysis",
+        "SQL (potentially)",
+        "Consulting skills",
+        "Python or R (potentially)",
+        "Data Science",
+        "Business Intelligence"
+      ]
+    }
+  },
+  {
+    "offer_title": "Deep Learning Research Intern",
+    "company": "Kayrros",
+    "matching_score": 79.5,
+    "details": {
+      "skill_similarity": 0.71,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Analysis",
+        "Python",
+        "Machine Learning"
+      ],
+      "missing_skills": [
+        "Model Evaluation",
+        "Data Preprocessing",
+        "Seizure Detection (Domain Specific)",
+        "TensorFlow or PyTorch (Likely)",
+        "Experiment Design",
+        "Deep Learning"
+      ]
+    }
+  },
+  {
+    "offer_title": "Data Scientist",
+    "company": "Aqemia",
+    "matching_score": 93.9,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Machine Learning",
+        "Python",
+        "SQL"
+      ],
+      "missing_skills": [
+        "Data Engineering (mentionné implicitement car \"Data Engineer\" apparaît dans la description)",
+        "Deep Learning",
+        "Cloud Computing (AWS, Azure, GCP)",
+        "Statistical Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "Strategy Consultant & Data Scientist",
+    "company": "fr.indeed.com (Probablement une société de conseil ou un cabinet de recrutement utilisant Indeed)",
+    "matching_score": 88.4,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 0.82,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis"
+      ],
+      "missing_skills": [
+        "R (si Data Scientist)",
+        "Market Research",
+        "Statistical Analysis",
+        "SQL (si Data Scientist)",
+        "Financial Modeling",
+        "Strategy Consulting Frameworks",
+        "Machine Learning (si Data Scientist)",
+        "Data Modeling",
+        "Python (si Data Scientist)",
+        "Business Intelligence"
+      ]
+    }
+  },
+  {
+    "offer_title": "Data Scientist",
+    "company": "QuantumBlack, AI by McKinsey",
+    "matching_score": 93.9,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Machine Learning",
+        "Python",
+        "SQL"
+      ],
+      "missing_skills": [
+        "Big Data Technologies (e.g., Spark, Hadoop)",
+        "R",
+        "Cloud Computing (e.g., AWS, Azure, GCP)",
+        "Model Deployment",
+        "Statistical Modeling"
+      ]
+    }
+  },
+  {
+    "offer_title": "Energy Data Scientist",
+    "company": "Indeed.com (Probablement pour un client, mais non spécifié)",
+    "matching_score": 93.9,
+    "details": {
+      "skill_similarity": 0.91,
+      "soft_skill_similarity": 1.0,
+      "matched_skills": [
+        "Data Visualization",
+        "Data Analysis",
+        "Machine Learning",
+        "Python",
+        "SQL"
+      ],
+      "missing_skills": [
+        "Data Science",
+        "R",
+        "Statistical Modeling",
+        "Energy Sector Knowledge"
+      ]
+    }
+  }
+]
