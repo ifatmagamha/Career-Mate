@@ -1,0 +1,151 @@
+```latex
+\documentclass[a4paper,10pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{titlesec}
+\usepackage{fontawesome5}
+\usepackage{enumitem}
+
+% --- Configuration de la page ---
+\geometry{
+    left=1.5cm,
+    right=1.5cm,
+    top=1.5cm,
+    bottom=1.5cm
+}
+\pagestyle{empty}
+
+% --- Couleurs et polices ---
+\definecolor{primary}{HTML}{005A9C} % Un bleu professionnel
+\definecolor{secondary}{HTML}{4F4F4F} % Gris foncé pour le texte
+\definecolor{lightgray}{HTML}{E0E0E0} % Gris clair pour les séparateurs
+
+\usepackage{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+\color{secondary}
+
+% --- Liens cliquables ---
+\hypersetup{
+    colorlinks=true,
+    urlcolor=primary,
+    linkcolor=primary,
+}
+
+% --- Personnalisation des sections ---
+\titleformat{\section}
+  {\Large\bfseries\color{primary}}
+  {}
+  {0em}
+  {}[\titlerule\vspace{-0.5ex}]
+\titlespacing*{\section}{0pt}{1.5em}{1em}
+
+% --- Informations personnelles ---
+\newcommand{\candidatename}{Yassine Dridi}
+\newcommand{\candidateemail}{yassine.dridi@dauphine.tn}
+\newcommand{\candidatelocation}{Tunis, Tunisie}
+\newcommand{\candidatelinkedin}{linkedin.com/in/yassinedridi} % Placeholder
+
+% --- Document ---
+\begin{document}
+
+% ====================
+% EN-TÊTE
+% ====================
+\begin{center}
+    {\Huge\bfseries\scshape\candidatename}
+    \vspace{0.5em}
+
+    \begin{tabular}{c c c}
+        \faEnvelope & \faMapMarkerAlt & \faLinkedin \\
+        \href{mailto:\candidateemail}{\candidateemail} & \candidatelocation & \href{https://\candidatelinkedin}{\candidatelinkedin}
+    \end{tabular}
+\end{center}
+
+% ====================
+% PROFIL
+% ====================
+\section*{Profil}
+Data Scientist avec une solide expérience en Machine Learning, analyse de données et modélisation statistique. Passionné par la transformation de données brutes en informations stratégiques, je cherche à appliquer mes compétences en Python, SQL et visualisation de données pour résoudre des problématiques complexes au sein de Modulaire Group en tant que Data Scientist Intern.
+
+% ====================
+% COMPÉTENCES
+% ====================
+\section*{Compétences Techniques}
+\begin{itemize}[leftmargin=*, label={}, itemsep=0.2em]
+    \item \textbf{Programmation \& Analyse de Données :} \textbf{Python} (Pandas, NumPy, Scikit-learn), SQL
+    \item \textbf{Machine Learning :} Modèles de régression et classification, Clustering, Feature Engineering, Validation de modèles
+    \item \textbf{Modélisation Statistique :} Tests d'hypothèses, Analyse de séries temporelles, Probabilités
+    \item \textbf{Visualisation de Données :} Matplotlib, Seaborn, Plotly (Connaissances de Tableau)
+    \item \textbf{Bases de Données :} PostgreSQL, MySQL
+\end{itemize}
+
+% ====================
+% EXPÉRIENCE PROFESSIONNELLE
+% ====================
+\section*{Expérience Professionnelle}
+
+\begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
+\textbf{Data Scientist} & \textit{Janv. 2021 -- Présent} \\
+\textit{Tech Solutions Inc.} & \textit{Tunis, Tunisie} \\
+\end{tabular*}
+\begin{itemize}[leftmargin=*, topsep=0.3em, itemsep=0.2em]
+    \item Développement et déploiement de modèles de \textbf{Machine Learning} pour prédire le comportement client, résultant en une amélioration de 15\% de la rétention.
+    \item \textbf{Analyse de données} exploratoire sur de grands jeux de données (>10M d'entrées) avec \textbf{Python} et \textbf{SQL} pour identifier des tendances et des opportunités de croissance.
+    \item Création de dashboards de \textbf{visualisation de données} pour communiquer les résultats des analyses aux équipes marketing et produit.
+    \item Optimisation des requêtes \textbf{SQL} pour le traitement et la manipulation des données, réduisant les temps d'exécution de 30\%.
+\end{itemize}
+
+\vspace{1em}
+
+\begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
+\textbf{Data Analyst} & \textit{Juin 2019 -- Déc. 2020} \\
+\textit{Data Insights Corp.} & \textit{Tunis, Tunisie} \\
+\end{tabular*}
+\begin{itemize}[leftmargin=*, topsep=0.3em, itemsep=0.2em]
+    \item Extraction et nettoyage de données provenant de sources multiples via des scripts Python et des requêtes SQL.
+    \item Production de rapports hebdomadaires et mensuels sur les indicateurs de performance clés (KPIs).
+    \item Collaboration avec les équipes métiers pour définir les besoins en analyse et traduire les questions business en requêtes de données.
+\end{itemize}
+
+% ====================
+% PROJETS ACADÉMIQUES ET PERSONNELS
+% ====================
+\section*{Projets Pertinents}
+
+\begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
+\textbf{Modèle de Prédiction de Churn Client} & \textit{Projet Universitaire} \\
+\end{tabular*}
+\begin{itemize}[leftmargin=*, topsep=0.3em, itemsep=0.2em]
+    \item Conception d'un pipeline complet de \textbf{Machine Learning} pour un dataset de télécommunications, de la préparation des données à l'évaluation du modèle (Logistic Regression, Random Forest).
+    \item Utilisation de techniques de \textbf{Data Visualization} pour présenter les facteurs d'influence principaux du churn.
+    \item \textbf{Technologies :} Python, Scikit-learn, Pandas, Matplotlib, Seaborn.
+\end{itemize}
+
+% ====================
+% FORMATION
+% ====================
+\section*{Formation}
+\begin{tabular*}{\textwidth}{@{}l@{\extracolsep{\fill}}r@{}}
+\textbf{Master en Mathématiques et Informatique Appliquées (MIA)} & \textit{2017 -- 2019} \\
+\multicolumn{2}{@{}l}{\textit{Université Paris-Dauphine | Tunis}} \\
+\end{tabular*}
+\textit{Spécialisation en Data Science et Analyse Statistique.}
+
+% ====================
+% COMPÉTENCES TRANSVERSES
+% ====================
+\section*{Compétences Transverses}
+\begin{itemize}[leftmargin=*, label={}, itemsep=0.2em, topsep=0.3em]
+    \item \textbf{Communication :} Présentation claire des résultats techniques à des audiences non-techniques.
+    \item \textbf{Résolution de problèmes :} Approche analytique et structurée pour décomposer des problèmes complexes.
+    \item \textbf{Travail d'équipe :} Expérience de collaboration en mode agile avec des équipes pluridisciplinaires.
+\end{itemize}
+
+\end{document}
+```
