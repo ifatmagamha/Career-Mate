@@ -1,0 +1,130 @@
+[
+  {
+    "application_id": 1,
+    "offer_title": "Data Scientist",
+    "company": "Descartes Underwriting",
+    "matching_score": 87.15,
+    "source_url": "https://fr.indeed.com/q-internship-data-scientist-emplois.html",
+    "status": "Generated",
+    "created_at": "2025-12-26T18:10:03.938234",
+    "last_update": "2025-12-26T18:10:03.938238",
+    "history": [
+      {
+        "date": "2025-12-26T18:10:03.938239",
+        "event": "Documents generated"
+      }
+    ]
+  },
+  {
+    "application_id": 2,
+    "offer_title": "Data Scientist Research",
+    "company": "Indeed.com (via une annonce agrégée)",
+    "matching_score": 49.5,
+    "source_url": "https://fr.indeed.com/q-data-scientist-research-l-paris-(75)-emplois.html",
+    "status": "Generated",
+    "created_at": "2025-12-26T20:32:39.617255",
+    "last_update": "2025-12-26T20:32:39.617278",
+    "history": [
+      {
+        "date": "2025-12-26T20:32:39.617280",
+        "event": "Documents generated"
+      }
+    ]
+  },
+  {
+    "application_id": 3,
+    "offer_title": "Data Scientist Asset Management",
+    "company": "Inferred from context: Likely a financial institution or asset management firm (given the title and the reference to Indeed.com's job listings)",
+    "matching_score": 37.42,
+    "source_url": "https://fr.indeed.com/q-data-scientist-asset-management-l-paris-(75)-emplois.html",
+    "status": "Generated",
+    "created_at": "2025-12-26T20:37:59.224117",
+    "last_update": "2025-12-26T20:37:59.224126",
+    "history": [
+      {
+        "date": "2025-12-26T20:37:59.224128",
+        "event": "Documents generated"
+      }
+    ]
+  },
+  {
+    "application_id": 4,
+    "offer_title": "Data Scientist",
+    "company": "Emerton Group",
+    "matching_score": 37.42,
+    "source_url": "https://fr.indeed.com/q-data-scientist-english-speaking-emplois.html",
+    "status": "Generated",
+    "created_at": "2025-12-26T20:42:05.484253",
+    "last_update": "2025-12-26T20:42:05.484261",
+    "history": [
+      {
+        "date": "2025-12-26T20:42:05.484263",
+        "event": "Documents generated"
+      }
+    ]
+  },
+  {
+    "application_id": 5,
+    "offer_title": "Data Scientist Intern",
+    "company": "Modulaire Group",
+    "matching_score": 88.4,
+    "source_url": "https://fr.indeed.com/viewjob?jk=e6266e6d80da3699",
+    "status": "Generated",
+    "created_at": "2025-12-26T20:46:06.522164",
+    "last_update": "2025-12-26T20:46:06.522186",
+    "history": [
+      {
+        "date": "2025-12-26T20:46:06.522188",
+        "event": "Documents generated"
+      }
+    ]
+  },
+  {
+    "application_id": 6,
+    "offer_title": "Data Scientist Intern",
+    "company": "Modulaire Group",
+    "matching_score": 93.9,
+    "source_url": "https://fr.indeed.com/viewjob?jk=e6266e6d80da3699",
+    "status": "Generated",
+    "created_at": "2025-12-26T20:48:52.211899",
+    "last_update": "2025-12-26T20:48:52.211908",
+    "history": [
+      {
+        "date": "2025-12-26T20:48:52.211910",
+        "event": "Documents generated"
+      }
+    ]
+  },
+  {
+    "application_id": 7,
+    "offer_title": "Data Scientist",
+    "company": "QuantumBlack, AI by McKinsey",
+    "matching_score": 93.9,
+    "source_url": "https://fr.indeed.com/viewjob?jk=e2a9d265e652599e",
+    "status": "Generated",
+    "created_at": "2025-12-27T17:13:41.495572",
+    "last_update": "2025-12-27T17:13:41.495579",
+    "history": [
+      {
+        "date": "2025-12-27T17:13:41.495580",
+        "event": "Documents generated"
+      }
+    ]
+  },
+  {
+    "application_id": 8,
+    "offer_title": "Data Scientist Research",
+    "company": "Indeed.com (en tant que site d'emploi)",
+    "matching_score": 33.0,
+    "source_url": "https://fr.indeed.com/q-data-scientist-research-l-paris-(75)-emplois.html",
+    "status": "Generated",
+    "created_at": "2025-12-27T17:28:10.894595",
+    "last_update": "2025-12-27T17:28:10.894603",
+    "history": [
+      {
+        "date": "2025-12-27T17:28:10.894605",
+        "event": "Documents generated"
+      }
+    ]
+  }
+]
