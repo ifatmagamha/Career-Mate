@@ -1,85 +1,145 @@
 import streamlit as st
+import pandas as pd
 from graph.workflow import build_workflow
+from dotenv import load_dotenv
 
-st.set_page_config(page_title="RecruitIA", layout="wide")
-st.title("🤖 RecruitIA - Générateur de candidatures automatisé")
+load_dotenv()
 
-# --- Étape 1 : Informations candidat ---
-st.header("1️⃣ Informations candidat")
+st.set_page_config(page_title="RecruitAI", layout="wide")
 
-name = st.text_input("Nom complet")
-email = st.text_input("Email")
-target_role = st.text_input("Poste visé", "Data Scientist")
-skills = st.text_area("Compétences techniques (séparées par une virgule)")
-soft_skills = st.text_area("Soft skills (séparées par une virgule)")
-experience_level = st.selectbox("Niveau d'expérience", ["Junior", "Mid-Level", "Senior"])
-location = st.text_input("Localisation souhaitée", "Paris")
+st.title("🤖 RecruitAI – Génération intelligente de CV & Lettre")
 
-# --- Bouton pour lancer le pipeline ---
-if st.button("Lancer le pipeline"):
+# ======================================================
+# SIDEBAR — PROFIL CANDIDAT (SOURCE DE VÉRITÉ)
+# ======================================================
+st.sidebar.header("👤 Informations personnelles")
 
-    if not (name and email and skills):
-        st.error("Veuillez remplir au moins le nom, email et les compétences techniques.")
-        st.stop()
+full_name = st.sidebar.text_input("Nom complet *")
+email = st.sidebar.text_input("Email")
+phone = st.sidebar.text_input("Téléphone")
+location = st.sidebar.text_input("Ville / Pays")
 
-    # --- Profil candidat ---
-    candidate_profile = {
-        "name": name,
-        "email": email,
-        "target_role": target_role,
-        "skills": [s.strip() for s in skills.split(",") if s.strip()],
-        "soft_skills": [s.strip() for s in soft_skills.split(",") if s.strip()],
-        "experience_level": experience_level,
-    }
+st.sidebar.header("🎓 Formation")
 
-    st.info("🟢 Exécution du pipeline RecruitIA...")
-    app = build_workflow()
+education_level = st.sidebar.selectbox(
+    "Niveau d'étude *",
+    ["Licence", "Master 1", "Master 2", "Doctorat"]
+)
 
-    initial_state = {
-        "query": target_role,
-        "location": location,
-        "limit": 20,
-        "candidate_profile": candidate_profile
-    }
+field_of_study = st.sidebar.text_input("Domaine d'étude *")
+university = st.sidebar.text_input("Université / École")
 
-    try:
-        final_state = app.invoke(initial_state)
-    except Exception as e:
-        st.error(f"❌ Erreur pendant l'exécution du workflow : {e}")
-        st.stop()
+st.sidebar.header("🛠️ Compétences")
 
-    output = final_state.get("final_output", {})
-    best_offer = output.get("target_offer")
+skills = st.sidebar.multiselect(
+    "Compétences techniques *",
+    ["Python", "ML", "NLP", "SQL", "Deep Learning", "Data Analysis"]
+)
 
-    if not best_offer:
-        st.warning("Aucune offre pertinente trouvée.")
-        st.stop()
+soft_skills = st.sidebar.multiselect(
+    "Soft skills",
+    ["Communication", "Travail en équipe", "Autonomie", "Adaptabilité"]
+)
 
-    # --- Résumé offre ---
-    st.success(
-        f"✅ Meilleure offre trouvée : "
-        f"{best_offer['offer_title']} chez {best_offer['company']}"
-    )
-    st.write("📊 Score de matching :", best_offer.get("matching_score"))
+languages = st.sidebar.multiselect(
+    "Langues",
+    ["Français", "Anglais", "Espagnol", "Arabe"]
+)
 
-    # --- Affichage CV ---
-    st.header("📄 CV généré")
-    cv_md = output.get("cv_markdown")
+st.sidebar.header("💼 Expérience & projets")
 
-    if cv_md:
-        st.markdown(cv_md, unsafe_allow_html=False)
+experience = st.sidebar.text_area("Expérience professionnelle")
+projects = st.sidebar.text_area("Projets académiques / personnels")
+
+# ======================================================
+# RECHERCHE OFFRE
+# ======================================================
+st.subheader("🔍 Offre ciblée")
+
+job_query = st.text_input("Poste recherché *", "Data Scientist stage")
+job_location = st.text_input("Localisation *", "Paris")
+limit = st.slider("Nombre d'offres analysées", 5, 30, 10)
+
+# ======================================================
+# VALIDATION DES DONNÉES
+# ======================================================
+required_fields_filled = all([
+    full_name,
+    education_level,
+    field_of_study,
+    skills,
+    job_query,
+    job_location
+])
+
+# ======================================================
+# LANCEMENT PIPELINE
+# ======================================================
+if st.button("🚀 Générer CV & Lettre"):
+    if not required_fields_filled:
+        st.error("❌ Merci de remplir tous les champs obligatoires (*)")
     else:
-        st.warning("CV non généré.")
+        with st.spinner("Génération des documents en cours..."):
+            workflow = build_workflow()
 
-    # --- Affichage Lettre ---
-    st.header("✉️ Lettre de motivation générée")
-    letter_md = output.get("cover_letter_markdown")
+            candidate_profile = {
+                "identity": {
+                    "full_name": full_name,
+                    "email": email,
+                    "phone": phone,
+                    "location": location
+                },
+                "education": {
+                    "level": education_level,
+                    "field": field_of_study,
+                    "university": university
+                },
+                "skills": skills,
+                "soft_skills": soft_skills,
+                "languages": languages,
+                "experience": experience,
+                "projects": projects
+            }
 
-    if letter_md:
-        st.markdown(letter_md, unsafe_allow_html=False)
-    else:
-        st.warning("Lettre de motivation non générée.")
+            state = workflow.invoke({
+                "query": job_query,
+                "location": job_location,
+                "limit": limit,
+                "candidate_profile": candidate_profile
+            })
 
-    # --- Tracking ---
-    st.header("📝 Suivi de la candidature")
-    st.json(final_state.get("tracking", {}))
+        st.success("Documents générés avec succès ✅")
+
+        # ======================================================
+        # MATCHING
+        # ======================================================
+        st.subheader("📊 Résultats de matching")
+        if state.get("matched_offers"):
+            st.dataframe(pd.DataFrame(state["matched_offers"]))
+        else:
+            st.warning("Aucune offre matchée.")
+
+        # ======================================================
+        # DOCUMENTS
+        # ======================================================
+        st.subheader("📄 Documents générés")
+
+        final_output = state.get("final_output", {})
+        if final_output:
+            col1, col2 = st.columns(2)
+
+            with col1:
+                with open(final_output["cv_pdf"], "rb") as f:
+                    st.download_button("📥 Télécharger le CV", f, "cv.pdf")
+
+            with col2:
+                with open(final_output["letter_pdf"], "rb") as f:
+                    st.download_button("📥 Télécharger la lettre", f, "lettre_motivation.pdf")
+
+        # ======================================================
+        # TRACKING
+        # ======================================================
+        st.subheader("🗂️ Suivi")
+        if "tracking" in state:
+            st.json(state["tracking"])
+
