@@ -1,11 +1,12 @@
-# agents/matcher.py
-
 import numpy as np
 from typing import List, Dict, Any
 from sklearn.metrics.pairwise import cosine_similarity
 
 
 def text_to_vector(text: str, vocabulary: List[str]) -> np.ndarray:
+    """
+    Convertit un texte en vecteur binaire basé sur un vocabulaire donné.
+    """
     text = text.lower()
     return np.array([1 if word.lower() in text else 0 for word in vocabulary])
 
@@ -21,6 +22,24 @@ class MatcherAgent:
         self.soft_skill_weight = soft_skill_weight
         self.top_k = top_k
 
+    # --------------------------------------------------
+    # SAFE COSINE (évite les crashs sklearn)
+    # --------------------------------------------------
+    def _safe_cosine(self, v1: np.ndarray, v2: np.ndarray) -> float:
+        """
+        Calcule la similarité cosine en toute sécurité.
+        Retourne 0.0 si l'un des vecteurs est vide.
+        """
+        if v1.size == 0 or v2.size == 0:
+            return 0.0
+        return cosine_similarity(
+            v1.reshape(1, -1),
+            v2.reshape(1, -1)
+        )[0][0]
+
+    # --------------------------------------------------
+    # MATCH D'UNE OFFRE
+    # --------------------------------------------------
     def _match_offer(
         self,
         job: Dict[str, Any],
@@ -41,18 +60,13 @@ class MatcherAgent:
         job_soft_vec = text_to_vector(job_soft_text, soft_skill_vocab)
         cand_soft_vec = text_to_vector(cand_soft_text, soft_skill_vocab)
 
-        skill_score = cosine_similarity(
-            job_skill_vec.reshape(1, -1),
-            cand_skill_vec.reshape(1, -1),
-        )[0][0]
-
-        soft_skill_score = cosine_similarity(
-            job_soft_vec.reshape(1, -1),
-            cand_soft_vec.reshape(1, -1),
-        )[0][0]
+        # ---- SAFE similarity ----
+        skill_score = self._safe_cosine(job_skill_vec, cand_skill_vec)
+        soft_skill_score = self._safe_cosine(job_soft_vec, cand_soft_vec)
 
         final_score = round(
-            (self.skill_weight * skill_score + self.soft_skill_weight * soft_skill_score) * 100,
+            (self.skill_weight * skill_score +
+             self.soft_skill_weight * soft_skill_score) * 100,
             2,
         )
 
@@ -64,11 +78,20 @@ class MatcherAgent:
             "details": {
                 "skill_similarity": round(skill_score, 2),
                 "soft_skill_similarity": round(soft_skill_score, 2),
-                "matched_skills": list(set(job.get("skills", [])) & set(candidate.get("skills", []))),
-                "missing_skills": list(set(job.get("skills", [])) - set(candidate.get("skills", []))),
+                "matched_skills": list(
+                    set(job.get("skills", [])) &
+                    set(candidate.get("skills", []))
+                ),
+                "missing_skills": list(
+                    set(job.get("skills", [])) -
+                    set(candidate.get("skills", []))
+                ),
             },
         }
 
+    # --------------------------------------------------
+    # LANGGRAPH NODE
+    # --------------------------------------------------
     def run(self, state: dict) -> dict:
         """
         LangGraph node
@@ -85,6 +108,7 @@ class MatcherAgent:
         if not candidate:
             raise ValueError("candidate_profile manquant dans le state")
 
+        # Vocabulaires issus UNIQUEMENT du candidat
         skill_vocab = list(set(candidate.get("skills", [])))
         soft_skill_vocab = list(set(candidate.get("soft_skills", [])))
 
@@ -94,8 +118,11 @@ class MatcherAgent:
         ]
 
         matched_sorted = sorted(
-            matched, key=lambda x: x["matching_score"], reverse=True
+            matched,
+            key=lambda x: x["matching_score"],
+            reverse=True
         )
 
         state["matched_offers"] = matched_sorted[: self.top_k]
         return state
+
