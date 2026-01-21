@@ -1,0 +1,88 @@
+```latex
+\documentclass[a4paper,11pt]{article}
+
+% PACKAGES
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+\usepackage[a4paper, margin=0.75in]{geometry}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+% COLORS & FONTS
+\definecolor{primary}{HTML}{005F73} % A dark teal color
+\definecolor{secondary}{HTML}{2E86AB}
+\definecolor{graytext}{HTML}{4A4A4A}
+
+\hypersetup{
+    colorlinks=true,
+    urlcolor=secondary,
+    pdfborder={0 0 0},
+}
+
+\pagestyle{empty} % Remove page numbers
+\setlength{\parindent}{0pt} % No indentation
+
+% --- HEADER FORMATTING ---
+\newcommand{\contactinfo}[1]{%
+    \color{graytext}\Info@ \ #1
+}
+
+% --- SECTION FORMATTING ---
+\titleformat{\section}
+  {\Large\bfseries\color{primary}}
+  {}
+  {0em}
+  {}
+  [\titlerule\vspace{0.5\baselineskip}]
+\titlespacing*{\section}{0pt}{\baselineskip}{\baselineskip}
+
+% --- CUSTOM COMMANDS ---
+\newcommand{\skillitem}[2]{%
+    \textbf{#1}: #2
+}
+
+\begin{document}
+
+%----------------------------------------------------------------------------------------
+%   HEADER
+%----------------------------------------------------------------------------------------
+
+\begin{center}
+    % Full Name
+    {\Huge\bfseries\color{primary} Dridi Yassine}
+    \vspace{10pt}
+    
+    % Contact Information
+    \contactinfo{Paris}
+\end{center}
+
+%----------------------------------------------------------------------------------------
+%   OBJECTIVE
+%----------------------------------------------------------------------------------------
+
+\section*{Objectif}
+Candidature pour un stage en tant que Data Scientist afin de mettre en application mes compétences techniques en Python, SQL et Machine Learning dans un environnement professionnel stimulant.
+
+%----------------------------------------------------------------------------------------
+%   SKILLS SECTION
+%----------------------------------------------------------------------------------------
+
+\section*{Compétences Techniques (Data Science)}
+
+\begin{itemize}[leftmargin=*, label={}, itemsep=4pt, topsep=0pt]
+    \item \skillitem{Langages de programmation}{Python}
+    \item \skillitem{Analyse de données}{Pandas}
+    \item \skillitem{Bases de données}{SQL}
+    \item \skillitem{Machine Learning (ML)}{Connaissance des concepts et modèles fondamentaux}
+\end{itemize}
+
+% As per the provided JSON, there is no information on education, professional experiences, or personal projects.
+% To adhere to the strict rule of not inventing any information, these sections are omitted.
+
+\end{document}
+```
