@@ -1,272 +1,429 @@
 # src/agents/writer.py
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Dict, Any, Tuple, List
+import os
+import re
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
-from src.config.settings import settings
-from src.export.pdf import render_structured_pdf
-from src.llm.gemini_client import llm, extract_json_dict
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen import canvas
+
+from src.config.logging import logger
 from src.schemas.candidate import CandidateProfile
 from src.schemas.job_offer import OfferAnalyzed
 
 
-def _clip(text: str, n: int = 8000) -> str:
-    return (text or "").strip()[:n]
+# -----------------------------
+# Helpers (text formatting)
+# -----------------------------
+def _safe(v: Any, default: str = "") -> str:
+    if v is None:
+        return default
+    s = str(v).strip()
+    return s if s else default
 
 
-def _safe_list(x) -> List[str]:
-    if isinstance(x, list):
-        return [str(i).strip() for i in x if str(i).strip()]
-    return []
+def _normalize_whitespace(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
-def _fallback_structured_cv(candidate: CandidateProfile, offer: OfferAnalyzed) -> Dict[str, Any]:
-    # deterministic, no hallucinations
-    return {
-        "header": {
-            "name": candidate.full_name,
-            "email": candidate.email,
-            "phone": candidate.phone or "À compléter",
-            "location": candidate.location,
-        },
-        "title": f"Candidature — {offer.title}",
-        "summary": [
-            "Profil à compléter (fallback).",
-            "Objectif : stage ciblé en lien avec l’offre.",
-        ],
-        "skills": _safe_list(offer.skills)[:10],
-        "experience": [
-            "À compléter : expériences/projets depuis le CV brut.",
-        ],
-        "projects": [
-            "À compléter : projets pertinents depuis le CV brut.",
-        ],
-        "education": [
-            "À compléter : formation depuis le CV brut.",
-        ],
-        "languages": [
-            "À compléter : langues.",
-        ],
-        "certifications": [],
-        "links": [],
-    }
+def _split_sentences(text: str, max_items: int = 6) -> List[str]:
+    text = _normalize_whitespace(text)
+    if not text:
+        return []
+    # Split on ".", "•", "-" lines
+    parts: List[str] = []
+    for chunk in re.split(r"[\n•]+", text):
+        chunk = chunk.strip(" -\t")
+        if not chunk:
+            continue
+        # Further split on "."
+        for s in chunk.split("."):
+            s = s.strip()
+            if len(s) < 8:
+                continue
+            parts.append(s)
+    # Dedup while keeping order
+    seen = set()
+    out = []
+    for p in parts:
+        key = p.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+        if len(out) >= max_items:
+            break
+    return out
 
 
-def _fallback_letter(candidate: CandidateProfile, offer: OfferAnalyzed) -> Dict[str, Any]:
-    return {
-        "subject": f"Candidature – {offer.title}",
-        "body": [
-            "Madame, Monsieur,",
-            "",
-            f"Je vous adresse ma candidature pour le poste de {offer.title} au sein de {offer.company or 'votre entreprise'}.",
-            "Mon parcours et mes compétences (décrites dans mon CV) m’ont permis de développer une base solide et une forte motivation pour contribuer à vos missions.",
-            "",
-            "Je serais ravi(e) d’échanger avec vous lors d’un entretien.",
-            "",
-            f"Cordialement,",
-            f"{candidate.full_name}",
-        ]
-    }
+def _dedup_keep_order(items: List[str]) -> List[str]:
+    seen = set()
+    out = []
+    for it in items:
+        t = (it or "").strip()
+        if not t:
+            continue
+        k = t.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(t)
+    return out
 
 
-def generate_structured_cv(candidate: CandidateProfile, offer: OfferAnalyzed) -> Dict[str, Any]:
+def _top_skills(candidate: CandidateProfile, offer: OfferAnalyzed, max_skills: int = 12) -> List[str]:
+    cand_kw = [str(x).strip() for x in (getattr(candidate, "target_keywords", None) or [])]
+    offer_sk = [str(x).strip() for x in (offer.skills or [])]
+
+    cand_kw = [x for x in cand_kw if x]
+    offer_sk = [x for x in offer_sk if x]
+
+    # Prioritize intersection, then candidate keywords, then offer skills
+    inter = []
+    cand_set = {x.lower() for x in cand_kw}
+    for s in offer_sk:
+        if s.lower() in cand_set:
+            inter.append(s)
+
+    merged = _dedup_keep_order(inter + cand_kw + offer_sk)
+    return merged[:max_skills]
+
+
+# -----------------------------
+# Minimal PDF layout engine
+# -----------------------------
+@dataclass
+class PDFStyle:
+    page_w: float = A4[0]
+    page_h: float = A4[1]
+    margin_l: float = 1.7 * cm
+    margin_r: float = 1.7 * cm
+    margin_t: float = 1.6 * cm
+    margin_b: float = 1.6 * cm
+
+    font: str = "Helvetica"
+    font_bold: str = "Helvetica-Bold"
+
+    title_size: int = 16
+    h2_size: int = 11
+    text_size: int = 10
+    small_size: int = 9
+
+    line_gap: float = 3.0  # extra spacing per line
+
+
+def _wrap_lines(text: str, max_width: float, font_name: str, font_size: int) -> List[str]:
+    # Greedy wrap by words
+    words = (text or "").split()
+    if not words:
+        return []
+    lines: List[str] = []
+    cur: List[str] = []
+    for w in words:
+        test = (" ".join(cur + [w])).strip()
+        if stringWidth(test, font_name, font_size) <= max_width:
+            cur.append(w)
+        else:
+            if cur:
+                lines.append(" ".join(cur))
+            cur = [w]
+    if cur:
+        lines.append(" ".join(cur))
+    return lines
+
+
+def _draw_paragraph(c: canvas.Canvas, x: float, y: float, text: str, style: PDFStyle, font_name: str, font_size: int) -> float:
+    max_w = style.page_w - style.margin_l - style.margin_r
+    lines = _wrap_lines(text, max_w, font_name, font_size)
+    c.setFont(font_name, font_size)
+    for ln in lines:
+        c.drawString(x, y, ln)
+        y -= (font_size + style.line_gap)
+    return y
+
+
+def _draw_bullets(c: canvas.Canvas, x: float, y: float, bullets: List[str], style: PDFStyle, font_size: int = 10) -> float:
+    max_w = style.page_w - style.margin_l - style.margin_r
+    bullet_indent = 12
+    c.setFont(style.font, font_size)
+    for b in bullets:
+        b = b.strip()
+        if not b:
+            continue
+        wrapped = _wrap_lines(b, max_w - bullet_indent, style.font, font_size)
+        if not wrapped:
+            continue
+        # bullet dot
+        c.drawString(x, y, "•")
+        c.drawString(x + bullet_indent, y, wrapped[0])
+        y -= (font_size + style.line_gap)
+        for ln in wrapped[1:]:
+            c.drawString(x + bullet_indent, y, ln)
+            y -= (font_size + style.line_gap)
+    return y
+
+
+def _section_title(c: canvas.Canvas, x: float, y: float, title: str, style: PDFStyle) -> float:
+    c.setFont(style.font_bold, style.h2_size)
+    c.drawString(x, y, title.upper())
+    y -= (style.h2_size + style.line_gap)
+    # thin separator
+    c.setLineWidth(0.6)
+    c.line(x, y, style.page_w - style.margin_r, y)
+    y -= 8
+    return y
+
+
+# -----------------------------
+# Public API
+# -----------------------------
+def generate_cv_pdf(
+    candidate: CandidateProfile,
+    offer: OfferAnalyzed,
+    out_path: str,
+) -> str:
     """
-    Returns a STRICT JSON structure for a full CV, grounded in candidate.cv_text.
-    No invention allowed; if missing -> 'À compléter'.
+    Generate a clean 1-page CV (best-effort) and save to out_path.
+    Returns out_path.
     """
-    cv_raw = _clip(candidate.cv_text, 9000)
+    style = PDFStyle()
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-    prompt = f"""
-Tu es un assistant RH expert ATS.
-Tu dois produire un CV COMPLET, bien structuré et ciblé pour l'offre.
+    c = canvas.Canvas(out_path, pagesize=A4)
+    x = style.margin_l
+    y = style.page_h - style.margin_t
 
-RÈGLES ANTI-HALLUCINATION (STRICTES) :
-- Tu n'as le droit d'utiliser QUE des informations présentes dans le CV brut.
-- Interdit d'inventer : entreprises, dates, diplômes, projets, outils, réalisations.
-- Si une info est manquante, mets exactement: "À compléter".
-- Tu peux réécrire/structurer, mais sans ajouter de nouveaux faits.
+    # Header
+    name = _safe(getattr(candidate, "full_name", None), "Candidat")
+    email = _safe(getattr(candidate, "email", None), "")
+    phone = _safe(getattr(candidate, "phone", None), "")
+    location = _safe(getattr(candidate, "location", None), "")
+    github = _safe(getattr(candidate, "github_url", None), "")
+    linkedin = _safe(getattr(candidate, "linkedin_url", None), "")
 
-SORTIE :
-- Retourne UNIQUEMENT un JSON valide (pas de markdown).
-- Le JSON doit contenir exactement ces clés :
+    c.setFont(style.font_bold, style.title_size)
+    c.drawString(x, y, name)
+    y -= (style.title_size + 6)
 
-{{
-  "header": {{
-    "name": "...",
-    "email": "...",
-    "phone": "...",
-    "location": "...",
-    "links": ["..."]
-  }},
-  "title": "Candidature — <titre du poste>",
-  "summary": ["...", "..."],
-  "skills": ["...", "..."],
-  "experience": ["- ...", "- ..."],
-  "projects": ["- ...", "- ..."],
-  "education": ["- ...", "- ..."],
-  "languages": ["- ...", "- ..."],
-  "certifications": ["- ..."],
-  "keywords_aligned": ["...","..."]
-}}
+    c.setFont(style.font, style.small_size)
+    header_line = " | ".join([p for p in [email, phone, location] if p])
+    if header_line:
+        c.drawString(x, y, header_line)
+        y -= (style.small_size + 6)
 
-CONTRAINTES DE STYLE :
-- experience/projects/education/languages : éléments en bullets (préfixe "- ")
-- skills : 8 à 14 items max
-- keywords_aligned : 8 à 12 mots max, issus de l'offre
+    links = " | ".join([p for p in [github, linkedin] if p])
+    if links:
+        c.drawString(x, y, links)
+        y -= (style.small_size + 10)
 
-OFFRE (structurée) :
-Titre: {offer.title}
-Entreprise: {offer.company or "unknown"}
-Lieu: {offer.location or "unknown"}
-Compétences: {offer.skills}
-Missions: {offer.missions}
-Exigences: {offer.requirements}
-Keywords: {offer.keywords}
-Résumé: {offer.summary or "unknown"}
+    # Title aligned to offer
+    target_title = _safe(offer.title, "Stage")
+    company = _safe(offer.company, "")
+    c.setFont(style.font_bold, 12)
+    c.drawString(x, y, f"CV — Candidature {target_title}" + (f" ({company})" if company else ""))
+    y -= (12 + 12)
 
-CV BRUT :
-{cv_raw}
-""".strip()
+    # Summary (from cv_text + offer summary)
+    y = _section_title(c, x, y, "Profil", style)
+    cv_text = _safe(getattr(candidate, "cv_text", None), "")
+    summary_bits = _split_sentences(cv_text, max_items=3)
+    offer_sum = _safe(getattr(offer, "summary", None), "")
+    if offer_sum and offer_sum.lower() not in (cv_text.lower() if cv_text else ""):
+        summary_bits.append(offer_sum)
+    summary_bits = _dedup_keep_order(summary_bits)[:4]
+    if not summary_bits:
+        summary_bits = ["Étudiant(e) motivé(e) avec une forte appétence Data / ML et une capacité à livrer des projets concrets."]
 
-    try:
-        text = llm.generate_text(prompt, temperature=0.2, max_output_tokens=1400) or ""
-        data = extract_json_dict(text)
+    y = _draw_bullets(c, x, y, summary_bits, style, font_size=style.text_size)
+    y -= 6
 
-        # minimal safety defaults
-        data.setdefault("header", {})
-        data["header"].setdefault("name", candidate.full_name)
-        data["header"].setdefault("email", candidate.email)
-        data["header"].setdefault("phone", candidate.phone or "À compléter")
-        data["header"].setdefault("location", candidate.location)
-        data["header"].setdefault("links", [])
+    # Skills
+    y = _section_title(c, x, y, "Compétences", style)
+    skills = _top_skills(candidate, offer, max_skills=14)
+    if not skills:
+        skills = ["Python", "SQL", "pandas", "scikit-learn", "Machine Learning"]
+    # Print as 2 lines-ish
+    c.setFont(style.font, style.text_size)
+    skills_line = " • ".join(skills)
+    y = _draw_paragraph(c, x, y, skills_line, style, style.font, style.text_size)
+    y -= 6
 
-        for k in ["summary", "skills", "experience", "projects", "education", "languages", "certifications", "keywords_aligned"]:
-            if k not in data or not isinstance(data[k], list):
-                data[k] = []
+    # Projects / Experience (best-effort from cv_text)
+    y = _section_title(c, x, y, "Projets & Expérience", style)
+    proj = _split_sentences(cv_text, max_items=6)
+    # Boost with offer missions keywords
+    missions = offer.missions or []
+    if missions:
+        # Add 1-2 mission-inspired lines if not present
+        for m in missions[:2]:
+            mm = _safe(m, "")
+            if mm and all(mm.lower() not in p.lower() for p in proj):
+                proj.append(mm)
+    proj = _dedup_keep_order(proj)[:6]
+    if not proj:
+        proj = ["Projet ML: classification/prédiction avec features + évaluation.", "Dashboard Streamlit: visualisation & reporting."]
 
-        if not data.get("title"):
-            data["title"] = f"Candidature — {offer.title}"
+    y = _draw_bullets(c, x, y, proj, style, font_size=style.text_size)
+    y -= 6
 
-        return data
-    except Exception:
-        return _fallback_structured_cv(candidate, offer)
+    # Education (fallback)
+    y = _section_title(c, x, y, "Formation", style)
+    edu = _safe(getattr(candidate, "education", None), "")
+    if edu:
+        y = _draw_paragraph(c, x, y, edu, style, style.font, style.text_size)
+    else:
+        y = _draw_bullets(
+            c,
+            x,
+            y,
+            ["Master/Ingénieur (en cours) — Data / IA (à compléter)", "Cours clés: ML, Stats, Data Engineering (à compléter)"],
+            style,
+            font_size=style.text_size,
+        )
+    y -= 6
+
+    # Footer
+    c.setFont(style.font, style.small_size)
+    c.drawString(x, style.margin_b * 0.65, f"Généré par RecruitAI — {datetime.now().strftime('%Y-%m-%d')}")
+    c.showPage()
+    c.save()
+
+    logger.info(f"[writer] saved CV -> {out_path}")
+    return out_path
 
 
-def generate_structured_letter(candidate: CandidateProfile, offer: OfferAnalyzed) -> Dict[str, Any]:
+def generate_letter_pdf(
+    candidate: CandidateProfile,
+    offer: OfferAnalyzed,
+    out_path: str,
+) -> str:
     """
-    Returns a structured letter (subject + lines), grounded in CV raw.
+    Generate a clean cover letter (1 page) and save to out_path.
+    Returns out_path.
     """
-    cv_raw = _clip(candidate.cv_text, 7000)
+    style = PDFStyle()
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-    prompt = f"""
-Tu es un assistant RH.
-Rédige une lettre de motivation EN FRANÇAIS, ciblée pour l'offre.
+    c = canvas.Canvas(out_path, pagesize=A4)
+    x = style.margin_l
+    y = style.page_h - style.margin_t
 
-RÈGLES STRICTES :
-- Ne pas inventer d'expériences/projets/diplômes.
-- Utiliser uniquement ce qui est présent dans le CV brut.
-- 180 à 260 mots environ.
-- Ton pro, simple, pas de blabla.
+    # Sender block
+    name = _safe(getattr(candidate, "full_name", None), "Candidat")
+    email = _safe(getattr(candidate, "email", None), "")
+    phone = _safe(getattr(candidate, "phone", None), "")
+    location = _safe(getattr(candidate, "location", None), "")
 
-SORTIE (UNIQUEMENT JSON) :
-{{
-  "subject": "...",
-  "body": ["ligne1", "ligne2", "..."]
-}}
+    c.setFont(style.font_bold, 12)
+    c.drawString(x, y, name)
+    y -= 16
+    c.setFont(style.font, style.text_size)
+    for line in [email, phone, location]:
+        if line:
+            c.drawString(x, y, line)
+            y -= 13
+    y -= 8
 
-OFFRE :
-Titre: {offer.title}
-Entreprise: {offer.company or "unknown"}
-Lieu: {offer.location or "unknown"}
-Compétences: {offer.skills}
-Missions: {offer.missions}
-Exigences: {offer.requirements}
+    # Recipient / subject
+    company = _safe(offer.company, "l'entreprise")
+    role = _safe(offer.title, "Stage")
+    city = _safe(offer.location, "")
+    c.setFont(style.font_bold, 12)
+    c.drawString(x, y, f"Objet : Candidature — {role}")
+    y -= 18
 
-CV BRUT :
-{cv_raw}
-""".strip()
+    c.setFont(style.font, style.text_size)
+    y = _draw_paragraph(c, x, y, "Madame, Monsieur,", style, style.font, style.text_size)
+    y -= 6
 
-    try:
-        text = llm.generate_text(prompt, temperature=0.3, max_output_tokens=900) or ""
-        data = extract_json_dict(text)
-        if not isinstance(data.get("body"), list):
-            data["body"] = []
-        if not data.get("subject"):
-            data["subject"] = f"Candidature – {offer.title}"
-        return data
-    except Exception:
-        return _fallback_letter(candidate, offer)
+    # Build letter content
+    skills = _top_skills(candidate, offer, max_skills=8)
+    skills_txt = ", ".join(skills[:5]) if skills else "Python, SQL, Machine Learning"
+
+    missions = offer.missions or []
+    reqs = offer.requirements or []
+    # Pick 2 lines max
+    mission_txt = ""
+    if missions:
+        mission_txt = missions[0]
+    elif offer.summary:
+        mission_txt = offer.summary
+
+    motivation = (
+        f"Je vous soumets ma candidature pour le poste de {role} chez {company}"
+        + (f" à {city}" if city else "")
+        + ". "
+        "Mon profil et mes projets en data correspondent bien aux attentes d’un stage orienté analyse et modélisation."
+    )
+
+    paragraph_2 = (
+        f"J’ai développé des bases solides en {skills_txt}. "
+        "J’ai déjà réalisé des projets appliqués (modèles ML, préparation de données, visualisation) "
+        "et je suis à l’aise pour itérer rapidement et documenter des résultats."
+    )
+
+    paragraph_3 = (
+        "Je suis particulièrement motivé(e) par cette opportunité car elle me permettra de contribuer concrètement "
+        "à des sujets data en environnement professionnel"
+        + (f", notamment autour de : {mission_txt}." if mission_txt else ".")
+    )
+
+    # If requirements exist, mention alignment
+    if reqs:
+        paragraph_3 += " Je pense correspondre aux prérequis clés, et je suis prêt(e) à monter en compétence rapidement."
+
+    closing = (
+        "Je serais ravi(e) d’échanger avec vous lors d’un entretien afin de détailler ma motivation "
+        "et la valeur que je peux apporter à votre équipe.\n\n"
+        "Cordialement,"
+    )
+
+    for p in [motivation, paragraph_2, paragraph_3, closing]:
+        y = _draw_paragraph(c, x, y, p, style, style.font, style.text_size)
+        y -= 10
+
+    c.setFont(style.font_bold, style.text_size)
+    c.drawString(x, y, name)
+
+    c.showPage()
+    c.save()
+
+    logger.info(f"[writer] saved letter -> {out_path}")
+    return out_path
 
 
 def generate_cv_and_letter_pdfs(
     user_id: str,
     candidate: CandidateProfile,
     offer: OfferAnalyzed,
-) -> Tuple[Path, Path]:
+    out_dir: str = "data/generated",
+) -> Dict[str, str]:
     """
-    Main API to call from Streamlit/graph:
-    outputs:
-      data/generated/{user_id}_cv.pdf
-      data/generated/{user_id}_lettre.pdf
+    Main entry for the Writer agent.
+    Creates and saves:
+      - {out_dir}/{user_id}_cv.pdf
+      - {out_dir}/{user_id}_lettre.pdf
+
+    Returns:
+      {"cv_pdf": "...", "letter_pdf": "..."}
     """
-    out_dir = Path(settings.DATA_DIR) / "generated"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
 
-    cv_data = generate_structured_cv(candidate, offer)
-    letter_data = generate_structured_letter(candidate, offer)
+    uid = (user_id or "user").strip()
+    uid = re.sub(r"[^a-zA-Z0-9_\-]+", "_", uid)
 
-    # Save debug json/text (useful)
-    (out_dir / f"{user_id}_cv.json").write_text(str(cv_data), encoding="utf-8")
-    (out_dir / f"{user_id}_lettre.json").write_text(str(letter_data), encoding="utf-8")
+    cv_path = os.path.join(out_dir, f"{uid}_cv.pdf")
+    letter_path = os.path.join(out_dir, f"{uid}_lettre.pdf")
 
-    # Build PDF blocks for CV
-    header = cv_data.get("header", {})
-    header_lines = [
-        f"{header.get('name','À compléter')}",
-        f"Email: {header.get('email','À compléter')}",
-        f"Tél: {header.get('phone','À compléter')}",
-        f"Localisation: {header.get('location','À compléter')}",
-    ]
-    links = header.get("links") or []
-    if links:
-        header_lines.append("Liens: " + " | ".join([str(x) for x in links]))
+    generate_cv_pdf(candidate, offer, cv_path)
+    generate_letter_pdf(candidate, offer, letter_path)
 
-    blocks = [
-        ("Coordonnées", header_lines),
-        ("Titre", [cv_data.get("title", f"Candidature — {offer.title}")]),
-        ("Profil", _safe_list(cv_data.get("summary")) or ["À compléter"]),
-        ("Compétences", [f"- {s}" for s in _safe_list(cv_data.get("skills"))] or ["À compléter"]),
-        ("Expériences", _safe_list(cv_data.get("experience")) or ["À compléter"]),
-        ("Projets", _safe_list(cv_data.get("projects")) or ["À compléter"]),
-        ("Formation", _safe_list(cv_data.get("education")) or ["À compléter"]),
-        ("Langues", _safe_list(cv_data.get("languages")) or ["À compléter"]),
-    ]
-
-    certs = _safe_list(cv_data.get("certifications"))
-    if certs:
-        blocks.append(("Certifications", certs))
-
-    kws = _safe_list(cv_data.get("keywords_aligned"))
-    if kws:
-        blocks.append(("Mots-clés alignés", [", ".join(kws)]))
-
-    cv_pdf = out_dir / f"{user_id}_cv.pdf"
-    letter_pdf = out_dir / f"{user_id}_lettre.pdf"
-
-    render_structured_pdf(
-        cv_pdf,
-        title=f"CV — {offer.title}",
-        blocks=blocks,
-    )
-
-    # Letter PDF blocks
-    letter_lines = _safe_list(letter_data.get("body")) or ["À compléter"]
-    render_structured_pdf(
-        letter_pdf,
-        title=f"Lettre de motivation — {offer.title}",
-        blocks=[("Objet", [letter_data.get("subject", f"Candidature – {offer.title}")]),
-                ("Lettre", letter_lines)],
-    )
-
-    return cv_pdf, letter_pdf
+    return {"cv_pdf": cv_path, "letter_pdf": letter_path}

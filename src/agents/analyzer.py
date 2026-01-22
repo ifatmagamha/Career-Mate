@@ -1,183 +1,202 @@
 # src/agents/analyzer.py
 from __future__ import annotations
 
-import re
-from typing import Any, Dict, List
+from typing import List, Optional, Any, Dict
+
+from pydantic import BaseModel, Field
 
 from src.config.logging import logger
-from src.llm.gemini_client import llm, extract_json_dict
-from src.schemas.job_offer import OfferRaw, OfferAnalyzed
+from src.llm.gemini_client import llm
+from src.schemas.job_offer import OfferRaw, OfferAnalyzed, ContractType, Seniority
+
+# RAG is optional: if it fails, analyzer still works
+try:
+    from src.rag.pipeline import build_rag_context
+except Exception:  # pragma: no cover
+    build_rag_context = None
+
+
+# -------------------------------------------------------------------
+# 1) Permissive schema for LLM output (avoid strict Literal failures)
+# -------------------------------------------------------------------
+class OfferAnalyzedLLM(BaseModel):
+    # url optional here -> we will force it from OfferRaw
+    url: Optional[str] = None
+    title: Optional[str] = None
+    company: Optional[str] = None
+    location: Optional[str] = None
+
+    contract_type: Optional[str] = "unknown"
+    seniority: Optional[str] = "unknown"
+
+    skills: List[str] = Field(default_factory=list)
+    missions: List[str] = Field(default_factory=list)
+    requirements: List[str] = Field(default_factory=list)
+    keywords: List[str] = Field(default_factory=list)
+
+    summary: Optional[str] = None
 
 
 ANALYZER_SYSTEM_PROMPT = """
 You are an information extraction system.
-Extract structured information from a job offer snippet.
+Extract structured information from the job offer text.
 
 STRICT RULES:
-- Output ONLY a valid JSON object (no markdown, no extra text)
+- Output ONLY a valid JSON object (no markdown, no extra keys)
 - Do NOT invent information
-- If information is missing, use "unknown" or empty lists []
-- Skills must be short, normalized (e.g. "Python", "SQL", "Machine Learning")
+- Use ONLY the provided text + RAG context
+- If missing, use "unknown" or empty lists []
+- Skills must be short and normalized (e.g. "Python", "SQL", "Machine Learning")
 
-Allowed contract_type values:
-- internship, full_time, part_time, apprenticeship, freelance, unknown
+IMPORTANT ENUMS:
+- contract_type must be one of: internship, full_time, part_time, apprenticeship, freelance, unknown
+- seniority must be one of: intern, junior, unknown
 
-Allowed seniority values:
-- intern, junior, unknown
-"""
-
-
-# --- Normalizers to match YOUR enums (strict) ---
-def _norm_contract_type(v: Any) -> str:
-    t = str(v or "").strip().lower()
-    if t in {"internship", "stage"}:
-        return "internship"
-    if t in {"apprenticeship", "alternance"}:
-        return "apprenticeship"
-    if t in {"part_time", "part-time", "temps partiel"}:
-        return "part_time"
-    if t in {"full_time", "full-time", "temps plein", "cdi"}:
-        return "full_time"
-    if t in {"freelance", "contractor"}:
-        return "freelance"
-    return "unknown"
+Return a JSON matching exactly the provided schema.
+""".strip()
 
 
-def _norm_seniority(v: Any) -> str:
-    s = str(v or "").strip().lower()
-
-    # your schema is strict: only intern/junior/unknown
-    if s in {"intern", "internship", "stage", "stagiaire"}:
-        return "intern"
-    if s in {"junior", "entry", "entry-level", "graduate"}:
-        return "junior"
-    return "unknown"
+# -------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------
+def _safe_str(x: Optional[str]) -> str:
+    return (x or "").strip()
 
 
-COMMON_SKILLS = [
-    "Python", "SQL", "Pandas", "NumPy", "Scikit-learn", "TensorFlow", "PyTorch",
-    "Machine Learning", "Deep Learning", "NLP", "LLM", "RAG",
-    "Power BI", "Tableau", "Spark", "Airflow", "Docker", "Kubernetes",
-    "Git", "AWS", "GCP", "Azure", "BigQuery", "Snowflake",
-    "Statistics", "A/B Testing", "ETL", "Data Engineering"
-]
+def _build_query(offer: OfferRaw) -> str:
+    parts = [_safe_str(offer.title), _safe_str(offer.company), _safe_str(offer.location)]
+    return " ".join([p for p in parts if p])
 
 
-def _extract_skills_heuristic(text: str) -> List[str]:
-    low = text.lower()
-    out, seen = [], set()
-    for s in COMMON_SKILLS:
-        if s.lower() in low and s not in seen:
-            out.append(s)
-            seen.add(s)
-    return out
+def _normalize_contract(x: Optional[str]) -> ContractType:
+    if not x:
+        return "unknown"
+    v = x.strip().lower()
+
+    mapping = {
+        # internships
+        "intern": "internship",
+        "internship": "internship",
+        "stage": "internship",
+        "stagiaire": "internship",
+        # apprenticeship
+        "alternance": "apprenticeship",
+        "apprenticeship": "apprenticeship",
+        # full time
+        "full-time": "full_time",
+        "full time": "full_time",
+        "full_time": "full_time",
+        "cdi": "full_time",
+        "cdd": "full_time",
+        # part time
+        "part-time": "part_time",
+        "part time": "part_time",
+        "part_time": "part_time",
+        # freelance
+        "freelance": "freelance",
+    }
+    return mapping.get(v, "unknown")
 
 
-def heuristic_analyze_offer(offer: OfferRaw) -> OfferAnalyzed:
-    """Fallback: 0 hallucination, works without LLM."""
-    text = f"{offer.title}\n{offer.description or ''}"
+def _normalize_seniority(x: Optional[str]) -> Seniority:
+    if not x:
+        return "unknown"
+    v = x.strip().lower()
 
-    # internship-only pipeline => mostly intern
-    contract_type = "internship" if any(k in text.lower() for k in ["stage", "intern"]) else "unknown"
-    seniority = "intern" if "intern" in text.lower() or "stage" in text.lower() else "unknown"
+    mapping = {
+        "intern": "intern",
+        "internship": "intern",
+        "stage": "intern",
+        "stagiaire": "intern",
+        "junior": "junior",
+        "entry": "junior",
+        "entry level": "junior",
+        "entry-level": "junior",
+    }
+    # everything else (mid/senior/etc) => unknown
+    return mapping.get(v, "unknown")
 
-    skills = _extract_skills_heuristic(text)
-    keywords = list(dict.fromkeys([w.lower() for w in re.findall(r"[A-Za-z][A-Za-z+\-]{2,}", text)][:25]))
 
-    return OfferAnalyzed(
-        url=offer.url,
-        title=offer.title,
-        company=offer.company,
-        location=offer.location,
-        contract_type=contract_type,
-        seniority=seniority,
-        skills=skills,
-        missions=[],
-        requirements=[],
-        keywords=keywords,
-        summary=None,
+def _build_rag_block(offer: OfferRaw) -> str:
+    if build_rag_context is None:
+        return ""
+
+    query = _build_query(offer)
+    url = str(offer.url)
+
+    blocks: List[str] = []
+    for focus in ("skills", "missions", "requirements"):
+        try:
+            res = build_rag_context(url, query, focus)
+            if getattr(res, "ok", False) and getattr(res, "text", ""):
+                txt = str(res.text).strip()
+                if txt:
+                    blocks.append(f"[{focus.upper()} CONTEXT]\n{txt}")
+        except Exception as e:
+            logger.warning(f"[rag] build_rag_context failed focus={focus} url={url} err={e}")
+
+    return "\n\n".join(blocks).strip()
+
+
+# -------------------------------------------------------------------
+# Public API
+# -------------------------------------------------------------------
+def analyze_offer(offer: OfferRaw) -> OfferAnalyzed:
+    """
+    Analyze a single OfferRaw and return OfferAnalyzed.
+    IMPORTANT: We do NOT ask the LLM to directly output OfferAnalyzed (too strict).
+    We ask for OfferAnalyzedLLM then normalize + validate to OfferAnalyzed.
+    """
+    rag_block = _build_rag_block(offer)
+
+    prompt = f"""
+{ANALYZER_SYSTEM_PROMPT}
+
+JOB OFFER (snippet):
+Title: {_safe_str(offer.title) or "unknown"}
+Company: {_safe_str(offer.company) or "unknown"}
+Location: {_safe_str(offer.location) or "unknown"}
+Snippet:
+{_safe_str(offer.description)}
+
+RAG CONTEXT (from the job page, may be partial):
+{rag_block if rag_block else "[NO RAG CONTEXT AVAILABLE]"}
+""".strip()
+
+    # ✅ KEY FIX: schema=OfferAnalyzedLLM (NOT OfferAnalyzed)
+    llm_out: OfferAnalyzedLLM = llm.generate_json(
+        prompt=prompt,
+        schema=OfferAnalyzedLLM,
+        temperature=0.1,
+        max_output_tokens=900,
     )
 
+    data: Dict[str, Any] = llm_out.model_dump()
 
-def analyze_offer_llm(offer: OfferRaw) -> OfferAnalyzed:
-    """
-    LLM analyzer but validated safely:
-    - parse JSON dict first (no schema crash)
-    - force trusted fields from OfferRaw
-    - normalize enums to your strict schema
-    """
-    prompt = f"""{ANALYZER_SYSTEM_PROMPT}
-
-Return JSON with these keys:
-url, title, company, location, contract_type, seniority, skills, missions, requirements, keywords, summary
-
-JOB OFFER (trusted fields):
-url: {offer.url}
-title: {offer.title}
-company: {offer.company or "unknown"}
-location: {offer.location or "unknown"}
-
-SNIPPET:
-{offer.description or ""}
-"""
-
-    text = llm.generate_text(prompt, temperature=0.1, max_output_tokens=650)
-    data: Dict[str, Any] = extract_json_dict(text)
-
-    # Force trusted fields (prevents missing url + prevents LLM from changing them)
+    # Force these fields from OfferRaw (LLM must not change them)
     data["url"] = str(offer.url)
     data["title"] = offer.title
     data["company"] = offer.company
     data["location"] = offer.location
 
-    # Normalize enums to YOUR allowed values
-    data["contract_type"] = _norm_contract_type(data.get("contract_type"))
-    data["seniority"] = _norm_seniority(data.get("seniority"))
+    # Normalize enums (avoid Literal crash)
+    data["contract_type"] = _normalize_contract(data.get("contract_type"))
+    data["seniority"] = _normalize_seniority(data.get("seniority"))
 
-    # Ensure lists
-    for k in ["skills", "missions", "requirements", "keywords"]:
-        if not isinstance(data.get(k), list):
-            data[k] = []
-    if not isinstance(data.get("summary"), (str, type(None))):
-        data["summary"] = None
-
-    # Anti-hallucination: if snippet is short, forbid long fabricated content
-    snippet_len = len((offer.description or "").strip())
-    if snippet_len < 160:
-        data["missions"] = []
-        data["requirements"] = []
-        data["summary"] = None
-
-    # If skills empty, use heuristic to help matcher
-    if not data["skills"]:
-        data["skills"] = _extract_skills_heuristic(f"{offer.title}\n{offer.description or ''}")
-
+    # Final strict validation
     return OfferAnalyzed.model_validate(data)
 
 
-def analyze_offers(offers: List[OfferRaw], *, llm_max: int = 3) -> List[OfferAnalyzed]:
-    """
-    Analyze a batch of offers.
-    - First llm_max offers: try LLM (better extraction)
-    - The rest: heuristic only (prevents quota issues)
-    - Always fallback to heuristic if LLM fails
-    """
-    logger.info(f"[analyzer] analyzing {len(offers)} offers (llm_max={llm_max})")
-    analyzed: List[OfferAnalyzed] = []
+def analyze_offers(offers: List[OfferRaw]) -> List[OfferAnalyzed]:
+    logger.info(f"[analyzer] analyzing {len(offers)} offers")
 
+    analyzed: List[OfferAnalyzed] = []
     for i, offer in enumerate(offers, start=1):
         try:
-            if i <= llm_max:
-                result = analyze_offer_llm(offer)
-            else:
-                result = heuristic_analyze_offer(offer)
-
+            result = analyze_offer(offer)
             analyzed.append(result)
             logger.info(f"[analyzer] ✔ {i}. {offer.title}")
         except Exception as e:
             logger.warning(f"[analyzer] ✖ {i}. failed title='{offer.title}' err={e}")
-            # last-resort: do not break the pipeline
-            analyzed.append(heuristic_analyze_offer(offer))
-            logger.info(f"[analyzer] ↪ fallback heuristic ✔ {i}. {offer.title}")
 
     return analyzed

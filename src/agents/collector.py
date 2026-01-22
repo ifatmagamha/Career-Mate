@@ -12,44 +12,46 @@ from src.utils.http import get_json
 
 GOOGLE_CSE_ENDPOINT = "https://www.googleapis.com/customsearch/v1"
 
-# --- Filters: keep "job postings", remove discussions/listings/education pages ---
+# hard reject sources
 NON_JOB_HOST_CONTAINS = [
     "reddit.com",
     "wikipedia.org",
-    "catalog-",  # university catalogs like catalog-2025-2026....
+    "catalog-",  # university catalogs
 ]
 
-# pages that are usually NOT a single job posting
+# listing/search pages (not a single job)
 NON_POSTING_URL_CONTAINS = [
-    "linkedin.com/jobs/",           # listing pages
-    "glassdoor.com/Job/",           # listing pages
-    "glassdoor.fr/Emploi/",         # listing pages
-    "/search?",                     # listing/search pages
-    "/search-page/",                # sometimes listings
-    "/jobs/search",                 # listings
-    "/careers/",                    # generic careers pages (sometimes OK, but too noisy for MVP)
-    "careers/"                      # broad filter; keep ATS hints below to still allow real postings
+    "linkedin.com/jobs/",           # LinkedIn listings (we will allow /jobs/view/ below)
+    "glassdoor.com/Job/",           # Glassdoor listing pages
+    "glassdoor.fr/Emploi/",         # Glassdoor listing pages
+    "/search?",                     # generic search pages
+    "/jobs/search",                 # generic job searches
+    "/search-page/",                # often listings
 ]
 
-# ATS / posting patterns
-GOOD_JOB_URL_HINTS = [
+# real job posting patterns / ATS
+GOOD_POSTING_HINTS = [
     "/job/",
     "/jobs/",
+    "/position/",
+    "/vacancies/",
     "myworkdayjobs.com",
     "greenhouse.io",
     "lever.co",
     "smartrecruiters.com",
     "ashbyhq.com",
+    "teamtailor.com",
 ]
 
-# Internship-only signals (FR + EN)
+# internship signals
 INTERNSHIP_HINTS = [
     "stage",
     "intern",
     "internship",
     "stagiaire",
-    "apprenticeship",   # optionnel : si tu veux aussi alternance, garde-le
-    "alternance",       # optionnel : si tu veux aussi alternance, garde-le
+    # optional (keep if you want alternance too)
+    "alternance",
+    "apprenticeship",
 ]
 
 
@@ -80,22 +82,34 @@ def _is_probably_job_posting(link: str) -> bool:
     host = (urlparse(link).netloc or "").lower()
     u = link.lower()
 
-    # hard reject: reddit, wikipedia, catalogs, etc.
+    # hard reject: reddit, wikipedia, catalogs...
     if any(bad in host for bad in NON_JOB_HOST_CONTAINS):
         return False
 
-    # reject listing/search pages
+    # LinkedIn special rule:
+    # allow ONLY real job pages: /jobs/view/...
+    if "linkedin.com" in host:
+        return "/jobs/view/" in u
+
+    # Glassdoor special rule:
+    # block listing pages; allow only when it looks like a direct posting (rare)
+    if "glassdoor." in host:
+        if "/job/" in u or "/Job/" in link:
+            return False
+        # if you want to fully exclude glassdoor for MVP:
+        return False
+
+    # reject known listing/search pages (unless ATS/posting hint says it's a real posting)
     if any(bad in u for bad in NON_POSTING_URL_CONTAINS):
-        # BUT allow ATS posting URLs even if they contain /careers/
-        if any(g in u for g in GOOD_JOB_URL_HINTS):
+        if any(g in u for g in GOOD_POSTING_HINTS):
             return True
         return False
 
-    # accept: common ATS / careers patterns
-    if any(g in u for g in GOOD_JOB_URL_HINTS):
+    # accept ATS patterns
+    if any(g in u for g in GOOD_POSTING_HINTS):
         return True
 
-    # fallback: if URL path contains something like /jobs/12345 etc.
+    # fallback: path contains /jobs/123 or /job/123
     path = (urlparse(link).path or "").lower()
     if "/job" in path or "/jobs" in path:
         return True
@@ -109,8 +123,11 @@ def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]
     Returns OfferRaw list (deduped by URL), filtered to likely job postings.
     """
 
-    # Internship-only query
-    q = f'{query} {location} (stage OR internship OR intern OR stagiaire)'
+    # Internship-only query + exclude noisy sites (optional but recommended)
+    q = (
+        f'{query} {location} (stage OR internship OR intern OR stagiaire) '
+        f'-site:reddit.com -site:wikipedia.org -site:glassdoor.com'
+    )
 
     items: List[OfferRaw] = []
     seen_urls = set()
@@ -144,15 +161,12 @@ def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]
             if not link or link in seen_urls:
                 continue
 
-            # Filter out login/gate pages
             if _looks_like_login_or_gate(title, snippet, link):
                 continue
 
-            # Must be internship (title/snippet/url)
             if not _is_internship(title, snippet, link):
                 continue
 
-            # Must look like a job posting
             if not _is_probably_job_posting(link):
                 continue
 
@@ -166,7 +180,6 @@ def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]
             if not company_guess:
                 company_guess = _extract_company_from_display_link(display_link)
 
-            # If "company" looks like a URL, discard it
             if company_guess and "http" in str(company_guess).lower():
                 company_guess = None
 
