@@ -4,7 +4,7 @@
 
 ---
 
-## 🔄 System Workflow
+## System Workflow
 
 The application follows a modular, state-driven workflow managed by **LangGraph**. User inputs are processed through a central agentic loop:
 
@@ -20,7 +20,7 @@ The application follows a modular, state-driven workflow managed by **LangGraph*
 
 ---
 
-## 🧠 Agent Model Cards
+##  Agent Model Cards
 
 ### 1. Router Agent
 *   **Role**: Intent Classifier
@@ -67,7 +67,7 @@ The application follows a modular, state-driven workflow managed by **LangGraph*
 
 ---
 
-## 📈 Evaluation & LLMOps
+## Evaluation & LLMOps
 
 The system includes a robust evaluation pipeline located in `evaluate.py`.
 *   **Standard Benchmark**: 25 questions covering all agent domains.
@@ -76,7 +76,7 @@ The system includes a robust evaluation pipeline located in `evaluate.py`.
 
 ---
 
-## 🚀 Key Takeaways & Project Learnings
+## Key Takeaways & Project Learnings
 
 1.  **Agentic Atomicity**: Splitting tasks into specialized agents (Collector vs. Analyzer) significantly increases reliability and allows for targeted heuristics where LLMs might fail.
 2.  **Orchestration over Chains**: Using LangGraph's state-machine approach proved superior to simple linear chains for handling complex user intents and looping flows.
@@ -94,7 +94,7 @@ The system includes a robust evaluation pipeline located in `evaluate.py`.
 
 ---
 
-## 🛠 Prerequisites & Installation
+## Prerequisites & Installation
 
 ### Prerequisites
 *   **Python 3.10+** (LangGraph & FastAPI)
