@@ -13,8 +13,7 @@ from src.graph.state import RecruitAIState
 llm = ChatGoogleGenerativeAI(
     model=settings.GEMINI_MODEL,
     google_api_key=settings.GEMINI_API_KEY,
-    temperature=0,
-    allow_dangerous_deserialization=True 
+    temperature=0
 )
 
 def load_jobs_dataframe() -> pd.DataFrame:
@@ -40,6 +39,10 @@ def stats_node(state: RecruitAIState) -> dict:
     1. Loads job data into DataFrame.
     2. Uses LangChain experimental Pandas Agent to answer structured queries.
     """
+    import time
+    from src.api.agent_traces import log_agent_trace
+    start_time = time.time()
+    
     messages = state.get("messages", [])
     if not messages:
         return {}
@@ -49,27 +52,33 @@ def stats_node(state: RecruitAIState) -> dict:
     
     logger.info(f"[stats_agent] Processing query: {query}")
     
-    df = load_jobs_dataframe()
-    if df.empty:
-        return {"messages": [AIMessage(content="I have no job data available to analyze right now.")]}
-
-    # Create the agent
-    # We use allow_dangerous_code=True because we trust our own environment context for now, 
-    # but in prod this should be sandboxed.
-    agent = create_pandas_dataframe_agent(
-        llm,
-        df,
-        verbose=True,
-        allow_dangerous_code=True,
-        agent_type="tool-calling",
-        max_iterations=5,
-    )
-    
     try:
+        df = load_jobs_dataframe()
+        if df.empty:
+            duration = (time.time() - start_time) * 1000
+            log_agent_trace("Stats", query, "No data available", duration)
+            return {"messages": [AIMessage(content="I have no job data available to analyze right now.")]}
+
+        # Create the agent
+        agent = create_pandas_dataframe_agent(
+            llm,
+            df,
+            verbose=True,
+            allow_dangerous_code=True,
+            agent_type="tool-calling",
+            max_iterations=5,
+        )
+        
         response = agent.invoke({"input": query})
         output_text = response["output"]
+        
+        duration = (time.time() - start_time) * 1000
+        log_agent_trace("Stats", query, output_text, duration)
+        
         logger.info(f"[stats_agent] Result: {output_text}")
         return {"messages": [AIMessage(content=output_text)]}
     except Exception as e:
+        duration = (time.time() - start_time) * 1000
+        log_agent_trace("Stats", query, str(e), duration, status="error")
         logger.error(f"[stats_agent] Error interacting with DataFrame: {e}")
         return {"messages": [AIMessage(content="I encountered an error trying to analyze the data.")]}

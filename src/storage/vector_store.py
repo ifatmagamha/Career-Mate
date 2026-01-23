@@ -26,7 +26,7 @@ def get_vector_store():
         # We try to load local index if exists
         vector_store = FAISS.load_local(
             folder_path=f"{settings.DATA_DIR}/faiss_index", 
-            embeddings=embeddings, 
+            embeddings=embeddings,
             allow_dangerous_deserialization=True
         )
         return vector_store

@@ -6,6 +6,7 @@ from src.config.settings import settings
 from src.config.logging import logger
 from src.graph.state import RecruitAIState
 from src.storage.vector_store import query_store
+from src.utils.prompts import load_prompt
 
 # Initialize LLM
 llm = ChatGoogleGenerativeAI(
@@ -14,27 +15,13 @@ llm = ChatGoogleGenerativeAI(
     temperature=0.3
 )
 
-RAG_SYSTEM_PROMPT = """You are a helpful assistant for a job candidate.
-You have access to their personal documents (CV, templates, etc.).
-
-CONTEXT:
-{context}
-
-QUESTION:
-{question}
-
-INSTRUCTIONS:
-- Answer the question based ONLY on the provided context.
-- If the answer is not in the context, say "I don't have that information in your documents."
-- Be concise and professional.
-"""
+RAG_SYSTEM_PROMPT = load_prompt("rag")
 
 def rag_node(state: RecruitAIState) -> dict:
-    """
-    RAG Agent Node:
-    1. Retrieve relevant docs based on last user message.
-    2. Generate answer.
-    """
+    import time
+    from src.api.agent_traces import log_agent_trace
+    start_time = time.time()
+    
     messages = state.get("messages", [])
     if not messages:
          return {}
@@ -44,18 +31,37 @@ def rag_node(state: RecruitAIState) -> dict:
     
     logger.info(f"[rag_agent] Searching for: {query}")
     
-    # 1. Retrieve
-    docs = query_store(query, k=3)
-    context_text = "\n\n".join([d.page_content for d in docs])
-    
-    if not context_text:
-        context_text = "No relevant documents found."
+    try:
+        # 1. Retrieve from Vector Store
+        docs = query_store(query, k=3)
+        context_parts = [d.page_content for d in docs]
+        
+        # 2. Add Candidate Profile info if available in state
+        candidate = state.get("candidate")
+        if candidate:
+            candidate_info = f"CURRENT PROFILE DATA:\nName: {candidate.full_name}\nEmail: {candidate.email}\nSkills: {', '.join(candidate.skills)}\nSummary: {candidate.summary}"
+            context_parts.append(candidate_info)
+            
+        context_text = "\n\n".join(context_parts)
+        
+        if not context_text:
+            context_text = "No relevant documents or profile data found."
 
-    # 2. Generate
-    prompt = ChatPromptTemplate.from_template(RAG_SYSTEM_PROMPT)
-    chain = prompt | llm
-    
-    response = chain.invoke({"context": context_text, "question": query})
-    logger.info(f"[rag_agent] Answer generated.")
-    
-    return {"messages": [response]}
+        # 2. Generate
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", RAG_SYSTEM_PROMPT),
+            ("human", "{question}")
+        ])
+        chain = prompt | llm
+        
+        response = chain.invoke({"context": context_text, "question": query})
+        logger.info(f"[rag_agent] Answer generated.")
+        
+        duration = (time.time() - start_time) * 1000
+        log_agent_trace("RAG", query, response.content, duration)
+        
+        return {"messages": [response]}
+    except Exception as e:
+        duration = (time.time() - start_time) * 1000
+        log_agent_trace("RAG", query, str(e), duration, status="error")
+        raise e

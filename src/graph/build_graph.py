@@ -3,7 +3,7 @@ from __future__ import annotations
 from langgraph.graph import StateGraph, END
 
 from src.graph.state import RecruitAIState
-from src.graph.nodes import node_collect, node_analyze, node_match, node_write, node_track
+from src.graph.nodes import node_collect, node_analyze, node_match, node_write, node_track, node_report_matches
 from src.graph.router import route_request
 from src.agents.rag_agent import rag_node
 from src.agents.stats_agent import stats_node
@@ -24,6 +24,7 @@ def build_recruit_graph():
     g.add_node("match", node_match)
     g.add_node("write", node_write)
     g.add_node("track", node_track)
+    g.add_node("report_matches", node_report_matches)
     
     # New Agents
     g.add_node("rag", rag_node)
@@ -45,12 +46,15 @@ def build_recruit_graph():
         }
     )
 
-    # Job Pipeline Flow
+    # Job Pipeline Flow (Search & Match)
     g.add_edge("collect", "analyze")
     g.add_edge("analyze", "match")
-    g.add_edge("match", "write")
-    g.add_edge("write", "track")
-    g.add_edge("track", END)
+    g.add_edge("match", "report_matches")
+    g.add_edge("report_matches", END) # Stop after reporting for Explorer
+    
+    # Application Generation Flow (Optional/Separate)
+    # g.add_edge("write", "track")
+    # g.add_edge("track", END)
     
     # Agent Flows
     g.add_edge("rag", END)

@@ -104,12 +104,18 @@ def _is_probably_job_posting(link: str) -> bool:
 
 def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]:
     """
-    Collect ONLY internship offers using Google Custom Search API.
+    Collect job offers using Google Custom Search API.
     Returns OfferRaw list (deduped by URL), filtered to likely job postings.
     """
 
-    # Internship-only query
-    q = f'{query} {location} (stage OR internship OR intern OR stagiaire)'
+    # Detect if user specifically wants internships
+    is_internship_request = any(w in query.lower() for w in ["stage", "intern", "stagiaire", "apprenticeship", "alternance"])
+    
+    if is_internship_request:
+        q = f'{query} {location} (stage OR internship OR intern OR stagiaire)'
+    else:
+        # General job search
+        q = f'"{query}" job hiring {location}'
 
     items: List[OfferRaw] = []
     seen_urls = set()
@@ -155,8 +161,8 @@ def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]
             if _looks_like_login_or_gate(title, snippet, link):
                 continue
 
-            # Must be internship (title/snippet/url)
-            if not _is_internship(title, snippet, link):
+            # Must be internship ONLY if specifically requested
+            if is_internship_request and not _is_internship(title, snippet, link):
                 continue
 
             # Must look like a job posting

@@ -4,20 +4,16 @@
     "title": "Python Developer Intern",
     "company": "TechCorp",
     "location": "Paris",
-    "contract_type": "internship",
-    "seniority": "intern",
+    "contract_type": "unknown",
+    "seniority": "unknown",
     "skills": [
       "Python",
-      "Docker",
-      "RAG"
+      "RAG",
+      "Docker"
     ],
     "missions": [],
     "requirements": [],
-    "keywords": [
-      "Python",
-      "Docker",
-      "RAG"
-    ],
+    "keywords": [],
     "summary": null
   },
   {
@@ -25,18 +21,16 @@
     "title": "Data Scientist Internship",
     "company": "AI Solutions",
     "location": "Remote",
-    "contract_type": "internship",
-    "seniority": "intern",
+    "contract_type": "unknown",
+    "seniority": "unknown",
     "skills": [
       "Python",
-      "Docker",
-      "RAG"
+      "RAG",
+      "Docker"
     ],
     "missions": [],
     "requirements": [],
-    "keywords": [
-      "Data Scientist"
-    ],
+    "keywords": [],
     "summary": null
   },
   {

@@ -1,81 +1,108 @@
-# Career Mate — AI Recruitment Assistant
+# RecruitAI (Career Mate) — Intelligent Career Assistant
 
-**Career Mate** is an intelligent, multi-agent system designed to optimize the job hunting process. It leverages **LangGraph**, **Gemini**, and **Streamlit** to act as a personalized career copilot.
-
----
-
-## 🏗 Architecture
-
-### 1. Multi-Agent Backend (`src/`)
-The core logic depends on a graph of specialized agents:
-*   **Orchestrator (Router)**: The "Brain". Analyzes user intent to route requests to the correct expert.
-*   **Job Pipeline Agent**: Handles new searches. It runs a sequence of `Collect -> Analyze -> Match -> Write -> Track`.
-*   **RAG Agent**: The "Memory". Uses Vector Search (ChromaDB) to answer questions based on the candidate's uploaded CV and profile.
-*   **Stats Agent (Pandas)**: The "Analyst". Queries the structured database of processed job offers using code execution to answer complex questions (e.g., "Average salary of Python jobs?").
-
-### 2. Frontend (`app/`)
-Built with **Streamlit**, featuring a modern "Career Mate" dark theme.
-*   **Unified Chat**: The main interface where users interact with the system naturally.
-*   **Job Cards**: Rich HTML components for visualizing offers.
-*   **Kanban Tracker**: A drag-and-drop style board to manage applications.
-*   **Docs Generator**: A tool to craft targeted cover letters using LLMs.
+**RecruitAI** is an agentic AI system designed to revolutionize the job search process. Built with a **React** frontend and a **FastAPI** backend, and orchestrated by **LangGraph**, it acts as a personalized career copilot that autonomously finds, analyzes, and tracks job opportunities while helping you manage your profile.
 
 ---
 
-## 🛠 Technical Choices
+## 🔄 System Workflow
 
-| Component | Choice | Justification |
-| :--- | :--- | :--- |
-| **Orchestration** | **LangGraph** | Provides superior control over cyclic workflows and state management compared to linear chains. |
-| **LLM** | **Gemini 1.5 Flash** | Chosen for its large context window (1M tokens) and low latency, essential for analyzing many job descriptions at once. |
-| **Vector DB** | **ChromaDB** | Local, swift, and easy to integrate with LangChain for RAG. |
-| **Data Tool** | **Pandas Agent** | Allows "Math-accurate" answers (counts, sums) which standard RAG struggles with. |
+The application follows a modular, state-driven workflow managed by **LangGraph**. User inputs are processed through a central agentic loop:
+
+1.  **Entry (Router)**: Every user query first hits the `Router Agent`, which classifies the intent into `job_pipeline`, `rag_agent`, `stats_agent`, or `general_chat`.
+2.  **Job Pipeline**: 
+    *   `Collector`: Scrapes live data based on the query.
+    *   `Analyzer`: Extracts structured JSON and normalized fields from raw text.
+    *   `Matcher`: Compares the candidate's vector-embedded profile against job offers to provide a match score (0-100%).
+    *   `Reporter`: Generates a conversational summary of findings.
+3.  **RAG Agent**: Retrieves context from the candidate's personal document vault (FAISS index) to answer specific questions about their experience.
+4.  **Stats Agent**: Queries the local analyzed job database using a specialized Pandas agent to provide market insights.
+5.  **Synchronization**: The system automatically monitors a `data/cvs` folder to ingest new resumes without manual upload.
 
 ---
 
-## 🚀 Installation & Execution
+## 🧠 Agent Model Cards
+
+### 1. Router Agent
+*   **Role**: Intent Classifier
+*   **Model**: Gemini 2.0 Flash
+*   **Input**: User query (text)
+*   **Logic**: Uses a few-shot prompt to classify text into 4 distinct routing paths.
+*   **Goal**: Ensure high-accuracy dispatching to specialized agents.
+
+### 2. Collector Agent
+*   **Role**: Data Ingestion
+*   **Tools**: Google Custom Search API
+*   **Logic**: Dynamically constructs search queries. Implements filters to exclude login pages, discussion forums, and irrelevant hostnames. Supports specific filters for internships/apprenticeships.
+*   **Goal**: Gather fresh, relevant job postings from across the web.
+
+### 3. Analyzer Agent
+*   **Role**: Information Extraction
+*   **Model**: Gemini 2.0 Flash + Heuristic Fallback
+*   **Logic**: Parses raw description text into a structured JSON schema (Title, Company, Skills, Seniority).
+*   **Anti-Hallucination**: Implements length-checks and heuristic validation to ensure extracted data stays true to the source snippet.
+
+### 4. Matcher Agent
+*   **Role**: Semantic Scorer
+*   **Algorithm**: TF-IDF + Semantic Cosine Similarity (Embeddings)
+*   **Logic**: Computes a weighted score based on `Global Context` (60%) and `Skills Overlap` (40%). Features a location booster and listing penalties.
+*   **Goal**: Rank jobs by true compatibility with the candidate's profile.
+
+### 5. RAG Agent (Document Expert)
+*   **Role**: Personal Knowledge Retrieval
+*   **Storage**: FAISS Vector Store + Profile State
+*   **Logic**: Retrieves relevant chunks from uploaded CVs and merges them with live profile data to provide context-aware answers.
+*   **Goal**: Answer "What is my experience with X?" or "Explain my role at Y".
+
+### 6. Stats Agent
+*   **Role**: Numeric/Market Analyst
+*   **Engine**: LangChain Pandas DataFrame Agent
+*   **Logic**: Analyzes the locally cached `job_offers_analyzed.json` to perform counts, averages, and distributions.
+*   **Goal**: Provide data-driven insights like "What is the average salary in Paris?".
+
+### 7. Resume Parser Agent
+*   **Role**: Profile Architect
+*   **Model**: Gemini 2.0 Flash + pypdf
+*   **Logic**: Converts binary PDF/TXT data into structured `CandidateProfile` objects.
+*   **Goal**: Transform unstructured career history into a data format usable by other agents.
+
+---
+
+## 📈 Evaluation & LLMOps
+
+The system includes a robust evaluation pipeline located in `evaluate.py`.
+*   **Standard Benchmark**: 25 questions covering all agent domains.
+*   **Judge**: Gemini-powered LLM-as-a-judge scoring responses from 1-5.
+*   **Monitoring**: Real-time Agent Dashboard in the UI tracks execution stats, latencies, and success rates.
+
+---
+
+## 🚀 Key Takeaways & Project Learnings
+
+1.  **Agentic Atomicity**: Splitting tasks into specialized agents (Collector vs. Analyzer) significantly increases reliability and allows for targeted heuristics where LLMs might fail.
+2.  **Orchestration over Chains**: Using LangGraph's state-machine approach proved superior to simple linear chains for handling complex user intents and looping flows.
+3.  **Human-in-the-loop**: The editable Profile View ensures the "Agent" doesn't have total control, allowing users to correct AI parsing mistakes before matching begins.
+4.  **Local Sync vs. Upload**: Automating folder-based ingestion (`data/cvs`) provides a much seamless developer and user experience than manual uploads.
+
+---
+
+## 🔭 Future Perspectives
+
+*   **Multi-language Support**: Expanding prompt templates to handle French, German, and Arabic resume styles.
+*   **Auto-Writer Implementation**: Fully connecting the Writer Node to generate tailored Cover Letters for every "Matched" job directly.
+*   **Agentic Feedback Loop**: Implementing a "Profile Improvement" agent that suggests skills to learn based on trending job requirements found by the Collector.
+*   **Persistence Layer**: Transitioning from JSON-based mock stores to a robust PostgreSQL/MongoDB backend for multi-user support.
+
+---
+
+## 🛠 Prerequisites & Installation
 
 ### Prerequisites
-*   Python 3.10+
-*   Google Gemini API Key
+*   **Python 3.10+** (LangGraph & FastAPI)
+*   **Node.js 18+** (React UI)
+*   **Google Gemini API Key** (LLM)
+*   **Google Custom Search API Key & CSE ID** (Data source)
 
-### Steps
-1.  **Clone the repository**
-2.  **Install dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
-3.  **Configure environment**:
-    Create a `.env` file:
-    ```
-    GEMINI_API_KEY=your_key_here
-    GEMINI_MODEL=gemini-1.5-flash
-    ```
-4.  **Run the Application**:
-    ```bash
-    streamlit run app/Home.py
-    ```
-
----
-
-## 📊 Evaluation
-
-The system includes a rigorous evaluation suite (`evaluate.py`) that uses **LLM-as-a-judge**.
-
-### Methodology
-*   **Dataset**: 25 questions covering RAG, Stats, Pipeline, and General Chat.
-*   **Scoring**: Each answer is rated 1-5 by an impartial LLM.
-
-### Latest Results
-To run your own evaluation:
-```bash
-python scripts/generate_data.py  # Gen dataset
-python evaluate.py               # Run Judge
-```
-*See `evaluation_report.md` for the latest detailed trace.*
-
----
-
-## 🔮 Future Improvements
-*   **Interview Simulator**: Add Voice-to-Text for mock interviews.
-*   **Fine-tuning**: Train a smaller model on successful cover letters.
+### Installation
+1.  **Backend**: `pip install -r requirements.txt`
+2.  **Frontend**: `cd ui && npm install`
+3.  **Launch**: Use `python -m uvicorn src.api.server:app` for the API and `npm run dev` for the UI.

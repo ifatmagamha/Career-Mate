@@ -7,24 +7,10 @@ from typing import Any, Dict, List
 from src.config.logging import logger
 from src.llm.gemini_client import llm, extract_json_dict
 from src.schemas.job_offer import OfferRaw, OfferAnalyzed
+from src.utils.prompts import load_prompt
 
 
-ANALYZER_SYSTEM_PROMPT = """
-You are an information extraction system.
-Extract structured information from a job offer snippet.
 
-STRICT RULES:
-- Output ONLY a valid JSON object (no markdown, no extra text)
-- Do NOT invent information
-- If information is missing, use "unknown" or empty lists []
-- Skills must be short, normalized (e.g. "Python", "SQL", "Machine Learning")
-
-Allowed contract_type values:
-- internship, full_time, part_time, apprenticeship, freelance, unknown
-
-Allowed seniority values:
-- intern, junior, unknown
-"""
 
 
 # --- Normalizers to match YOUR enums (strict) ---
@@ -106,20 +92,10 @@ def analyze_offer_llm(offer: OfferRaw) -> OfferAnalyzed:
     - force trusted fields from OfferRaw
     - normalize enums to your strict schema
     """
-    prompt = f"""{ANALYZER_SYSTEM_PROMPT}
-
-Return JSON with these keys:
-url, title, company, location, contract_type, seniority, skills, missions, requirements, keywords, summary
-
-JOB OFFER (trusted fields):
-url: {offer.url}
-title: {offer.title}
-company: {offer.company or "unknown"}
-location: {offer.location or "unknown"}
-
-SNIPPET:
-{offer.description or ""}
-"""
+    prompt_template = load_prompt("analyzer")
+    prompt = prompt_template.format(
+        raw_text=f"Title: {offer.title}\nCompany: {offer.company}\nLocation: {offer.location}\nDescription: {offer.description or ''}"
+    )
 
     text = llm.generate_text(prompt, temperature=0.1, max_output_tokens=650)
     data: Dict[str, Any] = extract_json_dict(text)

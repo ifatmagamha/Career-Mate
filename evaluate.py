@@ -7,6 +7,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from src.graph.build_graph import build_recruit_graph
 from src.config.settings import settings
 from src.config.logging import logger
+from src.schemas.candidate import CandidateProfile
 
 # Initialize Judge LLM
 judge_llm = ChatGoogleGenerativeAI(
@@ -32,16 +33,30 @@ Return ONLY the number (1-5).
 """
 
 async def evaluate():
-    print("🚀 Starting Evaluation...")
+    print(" Starting Evaluation...")
     
     # 1. Load Data
+    data_source = []
     try:
         df = pd.read_excel("data/evaluation_questions.xlsx")
+        data_source = df.to_dict('records')
     except Exception:
-        print("❌ Could not load data/evaluation_questions.xlsx. Run scripts/generate_data.py first.")
-        return
+        print(" 'data/evaluation_questions.xlsx' not found. Using embedded fallback dataset.")
+        data_source = [
+            {"id": 1, "question": "Find me a Python job in New York", "expected_intent": "search_jobs"},
+            {"id": 2, "question": "What is my phone number?", "expected_intent": "rag_query"},
+            {"id": 3, "question": "Write a cover letter for a Data Scientist role", "expected_intent": "generate_content"},
+            {"id": 4, "question": "How many jobs are in the tracking system?", "expected_intent": "stats"},
+            {"id": 5, "question": "Who is the president of France?", "expected_intent": "general_chat"},
+            {"id": 6, "question": "Do I have experience with Kubernetes?", "expected_intent": "rag_query"},
+            {"id": 7, "question": "Find remote React jobs", "expected_intent": "search_jobs"},
+            {"id": 8, "question": "Summarize my resume", "expected_intent": "rag_query"},
+            {"id": 9, "question": "What is 2 + 2?", "expected_intent": "general_chat"},
+            {"id": 10, "question": "I want to become a Product Manager, what should I add?", "expected_intent": "advice"},
+        ]
+        df = pd.DataFrame(data_source)
 
-    print(f"📥 Loaded {len(df)} questions.")
+    print(f" Loaded {len(df)} questions.")
     
     # 2. Build Graph
     graph = build_recruit_graph()
@@ -56,12 +71,27 @@ async def evaluate():
         
         print(f"[{index+1}/{len(df)}] Q: {question}")
         
+        
         start_time = time.time()
         try:
+            # Select profile based on Question instructions if any, or default to Alice
+            # For simplicity in this script, we just use Alice, but you could randomize.
+            from src.data.mock_profiles import MOCK_PROFILES
+            candidate = MOCK_PROFILES.get("custom")
+            if not candidate:
+                # Create a generic dummy profile if no custom one exists
+                candidate = CandidateProfile(
+                    full_name="Evaluation User",
+                    email="eval@example.com",
+                    cv_text="Generic profile for evaluation. Skills: Python, SQL, RAG.",
+                    skills=["Python", "SQL", "RAG"]
+                )
+
             # Invoke Agent
             inputs = {
                 "messages": [HumanMessage(content=question)],
-                "query": question
+                "query": question,
+                "candidate": candidate
             }
             # Low recursion limit for speed, we just want the response
             final_state = graph.invoke(inputs, config={"recursion_limit": 15})
@@ -113,7 +143,7 @@ async def evaluate():
     success_rate = (res_df[res_df["score"] >= 3].shape[0] / len(res_df)) * 100
     
     print("\n" + "="*30)
-    print("📊 EVALUATION RESULTS")
+    print("[EVALUATION RESULTS]")
     print("="*30)
     print(f"Average Score: {avg_score:.2f} / 5")
     print(f"Success Rate:  {success_rate:.1f}%")
@@ -143,7 +173,7 @@ async def evaluate():
     with open("evaluation_report.md", "w", encoding="utf-8") as f:
         f.write(md_report)
         
-    print("✅ Saved detailed report to evaluation_report.md")
+    print("[Done] Saved detailed report to evaluation_report.md")
 
 if __name__ == "__main__":
     asyncio.run(evaluate())

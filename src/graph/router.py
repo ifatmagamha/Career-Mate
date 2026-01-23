@@ -4,6 +4,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from src.config.settings import settings
+from src.utils.prompts import load_prompt
 from src.graph.state import RecruitAIState
 from src.config.logging import logger
 
@@ -15,56 +16,52 @@ llm = ChatGoogleGenerativeAI(
 )
 
 # Router Prompt
-ROUTER_SYSTEM_PROMPT = """You are the Orchestrator for RecruitAI.
-Your job is to route the user's request to the correct agent.
-
-AVAILABLE AGENTS:
-1. "job_pipeline": User specifically wants to LAUNCH a new search or scrape operations. (Keywords: find new jobs, scrape linkedin, look for offers).
-2. "rag_agent": User asks about THEIR OWN profile, CV, or saved templates. (Keywords: what's on my cv? do I have python skills?).
-3. "stats_agent": User asks for STATISTICS, COUNTS, or QUESTIONS about existing job offers in the database. (Keywords: how many jobs?, what is the average salary?, list python jobs, compare remote vs onsite).
-4. "general_chat": Simple greetings, or clarifications.
-
-OUTPUT:
-Return ONLY one of these strings: "job_pipeline", "rag_agent", "stats_agent", "general_chat".
-"""
+ROUTER_SYSTEM_PROMPT = load_prompt("router")
 
 def route_request(state: RecruitAIState) -> Literal["job_pipeline", "rag_agent", "stats_agent", "general_chat"]:
-    """
-    Decides the next node based on the last user message.
-    """
+    import time
+    from src.api.agent_traces import log_agent_trace
+    start_time = time.time()
+    
     messages = state.get("messages", [])
     if not messages:
         return "general_chat"
     
     last_msg = messages[-1]
-    if not isinstance(last_msg, HumanMessage):
-         # If the last message wasn't human, likely we just finished a tool? 
-         # Default to END or chat. for now, let's assume we want to stop or chat.
-         return "general_chat"
+    query = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
 
-    logger.info(f"[router] Routing message: {last_msg.content[:50]}...")
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", ROUTER_SYSTEM_PROMPT),
-        ("human", "{input}")
-    ])
-    
-    chain = prompt | llm
+    logger.info(f"[router] Routing message: {query[:50]}...")
     
     try:
-        response = chain.invoke({"input": last_msg.content})
-        decision = response.content.strip().lower()
+        prompt = ChatPromptTemplate.from_messages([
+            ("human", ROUTER_SYSTEM_PROMPT)
+        ])
         
-        # Normalize
-        if "job" in decision or "pipeline" in decision:
-            return "job_pipeline"
-        elif "rag" in decision or "cv" in decision:
-            return "rag_agent"
-        elif "stats" in decision or "count" in decision or "average" in decision or "list" in decision:
-            return "stats_agent"
+        # Format
+        final_prompt = prompt.format(query=query)
+        
+        # Direct generation
+        response = llm.invoke(final_prompt)
+        content = response.content.strip().lower()
+        
+        # Simple string matching
+        if "job" in content or "pipeline" in content:
+            decision = "job_pipeline"
+        elif "rag" in content or "profile" in content or "cv" in content or "resume" in content:
+             decision = "rag_agent"
+        elif "stats" in content or "count" in content or "salary" in content or "market" in content:
+             decision = "stats_agent"
         else:
-            return "general_chat"
-            
+             decision = "general_chat"
+             
+        duration = (time.time() - start_time) * 1000
+        log_agent_trace("Router", query, f"Routed to {decision}", duration)
+        
+        logger.info(f"[router] Decision: {decision} (raw: {content[:20]})")
+        return decision
+        
     except Exception as e:
+        duration = (time.time() - start_time) * 1000
+        log_agent_trace("Router", query, str(e), duration, status="error")
         logger.error(f"[router] Error routing: {e}")
         return "general_chat"

@@ -1,0 +1,19 @@
+John Doe
+Email: john.doe@example.com
+Phone: +1 234 567 890
+Location: New York, USA
+
+Summary:
+Experienced Software Engineer with 5 years of experience in building scalable web applications using Python, Django, and React. Passionate about AI and Machine Learning.
+
+Skills:
+Python, Django, React, TypeScript, PostgreSQL, Docker, Kubernetes, AWS, Git, Machine Learning, FASTAPI.
+
+Experience:
+- Senior Software Engineer at Tech Corp (Jan 2021 - Present)
+  Developed and maintained microservices using Python and Fast API. Led a team of 4 developers to rebuild the core API.
+- Junior Developer at Web Solutions (June 2018 - Dec 2020)
+  Built responsive front-end components using React and styled them with Tailwind CSS.
+
+Education:
+- Bachelor of Science in Computer Science from NYU (2014-2018)

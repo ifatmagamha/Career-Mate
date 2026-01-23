@@ -6,6 +6,7 @@ from src.export.pdf import render_structured_pdf
 from src.llm.gemini_client import llm, extract_json_dict
 from src.schemas.candidate import CandidateProfile
 from src.schemas.job_offer import OfferAnalyzed
+from src.utils.prompts import load_prompt
 
 
 def _clip(text: str, n: int = 8000) -> str:
@@ -19,50 +20,36 @@ def _safe_list(x) -> List[str]:
 
 
 def _fallback_structured_cv(candidate: CandidateProfile, offer: OfferAnalyzed) -> Dict[str, Any]:
-    # deterministic, no hallucinations
+    # generic fallback (English/French neutral or mixed)
     return {
         "header": {
-            "name": candidate.full_name,
+            "name": candidate.full_name or "Unknown",
             "email": candidate.email,
-            "phone": candidate.phone or "À compléter",
+            "phone": candidate.phone or "[Phone]",
             "location": candidate.location,
         },
-        "title": f"Candidature — {offer.title}",
-        "summary": [
-            "Profil à compléter (fallback).",
-            "Objectif : stage ciblé en lien avec l’offre.",
-        ],
+        "title": f"Application — {offer.title}",
+        "summary": ["Profile summary to be completed."],
         "skills": _safe_list(offer.skills)[:10],
-        "experience": [
-            "À compléter : expériences/projets depuis le CV brut.",
-        ],
-        "projects": [
-            "À compléter : projets pertinents depuis le CV brut.",
-        ],
-        "education": [
-            "À compléter : formation depuis le CV brut.",
-        ],
-        "languages": [
-            "À compléter : langues.",
-        ],
-        "certifications": [],
-        "links": [],
+        "experience": ["- Experience 1...", "- Experience 2..."],
+        "projects": [],
+        "education": [],
+        "languages": [],
+        "match_rationale": "Fallback mode: AI generation failed."
     }
 
 
 def _fallback_letter(candidate: CandidateProfile, offer: OfferAnalyzed) -> Dict[str, Any]:
     return {
-        "subject": f"Candidature – {offer.title}",
+        "subject": f"Application for {offer.title}",
         "body": [
-            "Madame, Monsieur,",
+            "Dear Hiring Manager,",
             "",
-            f"Je vous adresse ma candidature pour le poste de {offer.title} au sein de {offer.company or 'votre entreprise'}.",
-            "Mon parcours et mes compétences (décrites dans mon CV) m’ont permis de développer une base solide et une forte motivation pour contribuer à vos missions.",
+            f"I am writing to express my interest in the {offer.title} position at {offer.company}.",
+            "Please find my resume attached.",
             "",
-            "Je serais ravi(e) d’échanger avec vous lors d’un entretien.",
-            "",
-            f"Cordialement,",
-            f"{candidate.full_name}",
+            "Best regards,",
+            f"{candidate.full_name or 'Candidate'}",
         ]
     }
 
@@ -70,83 +57,32 @@ def _fallback_letter(candidate: CandidateProfile, offer: OfferAnalyzed) -> Dict[
 def generate_structured_cv(candidate: CandidateProfile, offer: OfferAnalyzed) -> Dict[str, Any]:
     """
     Returns a STRICT JSON structure for a full CV, grounded in candidate.cv_text.
-    No invention allowed; if missing -> 'À compléter'.
     """
     cv_raw = _clip(candidate.cv_text, 9000)
 
-    prompt = f"""
-Tu es un assistant RH expert ATS.
-Tu dois produire un CV COMPLET, bien structuré et ciblé pour l'offre.
-
-RÈGLES ANTI-HALLUCINATION (STRICTES) :
-- Tu n'as le droit d'utiliser QUE des informations présentes dans le CV brut.
-- Interdit d'inventer : entreprises, dates, diplômes, projets, outils, réalisations.
-- Si une info est manquante, mets exactement: "À compléter".
-- Tu peux réécrire/structurer, mais sans ajouter de nouveaux faits.
-
-SORTIE :
-- Retourne UNIQUEMENT un JSON valide (pas de markdown).
-- Le JSON doit contenir exactement ces clés :
-
-{{
-  "header": {{
-    "name": "...",
-    "email": "...",
-    "phone": "...",
-    "location": "...",
-    "links": ["..."]
-  }},
-  "title": "Candidature — <titre du poste>",
-  "summary": ["...", "..."],
-  "skills": ["...", "..."],
-  "experience": ["- ...", "- ..."],
-  "projects": ["- ...", "- ..."],
-  "education": ["- ...", "- ..."],
-  "languages": ["- ...", "- ..."],
-  "certifications": ["- ..."],
-  "keywords_aligned": ["...","..."]
-}}
-
-CONTRAINTES DE STYLE :
-- experience/projects/education/languages : éléments en bullets (préfixe "- ")
-- skills : 8 à 14 items max
-- keywords_aligned : 8 à 12 mots max, issus de l'offre
-
-OFFRE (structurée) :
-Titre: {offer.title}
-Entreprise: {offer.company or "unknown"}
-Lieu: {offer.location or "unknown"}
-Compétences: {offer.skills}
-Missions: {offer.missions}
-Exigences: {offer.requirements}
-Keywords: {offer.keywords}
-Résumé: {offer.summary or "unknown"}
-
-CV BRUT :
-{cv_raw}
-""".strip()
+    prompt_template = load_prompt("writer_cv")
+    # FIX: Unpack offer fields explicitly for the prompt
+    prompt = prompt_template.format(
+        title=offer.title,
+        company=offer.company or "Unknown Company",
+        location=offer.location or "Remote/Unknown",
+        skills=", ".join(_safe_list(offer.skills)),
+        missions=", ".join(_safe_list(offer.missions)),
+        cv_raw=cv_raw
+    )
 
     try:
-        text = llm.generate_text(prompt, temperature=0.2, max_output_tokens=1400) or ""
+        text = llm.generate_text(prompt, temperature=0.2, max_output_tokens=1500) or ""
         data = extract_json_dict(text)
 
         # minimal safety defaults
         data.setdefault("header", {})
         data["header"].setdefault("name", candidate.full_name)
         data["header"].setdefault("email", candidate.email)
-        data["header"].setdefault("phone", candidate.phone or "À compléter")
-        data["header"].setdefault("location", candidate.location)
-        data["header"].setdefault("links", [])
-
-        for k in ["summary", "skills", "experience", "projects", "education", "languages", "certifications", "keywords_aligned"]:
-            if k not in data or not isinstance(data[k], list):
-                data[k] = []
-
-        if not data.get("title"):
-            data["title"] = f"Candidature — {offer.title}"
-
+        
         return data
-    except Exception:
+    except Exception as e:
+        print(f"Error generating CV: {e}")
         return _fallback_structured_cv(candidate, offer)
 
 
@@ -156,43 +92,24 @@ def generate_structured_letter(candidate: CandidateProfile, offer: OfferAnalyzed
     """
     cv_raw = _clip(candidate.cv_text, 7000)
 
-    prompt = f"""
-Tu es un assistant RH.
-Rédige une lettre de motivation EN FRANÇAIS, ciblée pour l'offre.
-
-RÈGLES STRICTES :
-- Ne pas inventer d'expériences/projets/diplômes.
-- Utiliser uniquement ce qui est présent dans le CV brut.
-- 180 à 260 mots environ.
-- Ton pro, simple, pas de blabla.
-
-SORTIE (UNIQUEMENT JSON) :
-{{
-  "subject": "...",
-  "body": ["ligne1", "ligne2", "..."]
-}}
-
-OFFRE :
-Titre: {offer.title}
-Entreprise: {offer.company or "unknown"}
-Lieu: {offer.location or "unknown"}
-Compétences: {offer.skills}
-Missions: {offer.missions}
-Exigences: {offer.requirements}
-
-CV BRUT :
-{cv_raw}
-""".strip()
+    prompt_template = load_prompt("writer_letter")
+    prompt = prompt_template.format(
+        title=offer.title,
+        company=offer.company or "Unknown",
+        location=offer.location or "Unknown",
+        skills=", ".join(_safe_list(offer.skills)),
+        missions=", ".join(_safe_list(offer.missions)),
+        cv_raw=cv_raw
+    )
 
     try:
-        text = llm.generate_text(prompt, temperature=0.3, max_output_tokens=900) or ""
+        text = llm.generate_text(prompt, temperature=0.3, max_output_tokens=1000) or ""
         data = extract_json_dict(text)
         if not isinstance(data.get("body"), list):
             data["body"] = []
-        if not data.get("subject"):
-            data["subject"] = f"Candidature – {offer.title}"
         return data
-    except Exception:
+    except Exception as e:
+        print(f"Error generating Letter: {e}")
         return _fallback_letter(candidate, offer)
 
 
