@@ -1,4 +1,3 @@
-# src/graph/nodes.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,7 +15,7 @@ from src.storage.io import save_json
 def node_collect(state: RecruitAIState) -> RecruitAIState:
     offers_raw = collect_offers(
         query=state["query"],
-        location=state["location"],
+        location=state.get("location", "Paris"), # Default for evaulation
         limit=state.get("limit", 10),
     )
     state["offers_raw"] = offers_raw

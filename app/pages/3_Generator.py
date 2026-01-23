@@ -1,5 +1,8 @@
-# apps/3_Generator.py
 from __future__ import annotations
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 from src.ui.nav import nav
 nav()
 
@@ -59,7 +62,29 @@ candidate = CandidateProfile(
     target_keywords=profile.target_keywords,
 )
 
-gen_btn = st.button("✨ Generate CV + Letter", type="primary")
+
+
+col1, col2 = st.columns([2, 1])
+with col1:
+    st.markdown("### 1. What is the context?")
+    context_input = st.text_area(
+        "Provide specific details (e.g., 'I met the recruiter at a fair', 'I love their sustainability mission')",
+        placeholder="I want to emphasize my experience in Python...",
+        height=150
+    )
+
+with col2:
+    st.markdown("### 2. Select your tone")
+    tone_style = st.selectbox("Tone", ["Professional", "Enthusiastic", "Casual", "Academic"], index=0)
+    
+    gen_btn = st.button("✨ Generate", type="primary", use_container_width=True)
+
+# Merge inputs into candidate notes dynamically
+if context_input:
+    # We append this context to help the LLM writer
+    candidate.cv_text += f"\n\n[USER CONTEXT FOR LETTER]: {context_input}"
+if tone_style:
+     candidate.cv_text += f"\n\n[TONE]: {tone_style}"
 
 out_dir = Path(settings.DATA_DIR) / "generated"
 cv_txt_path = out_dir / "generated_cv.txt"

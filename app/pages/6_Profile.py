@@ -1,5 +1,8 @@
-# apps/6_Profile.py
 from __future__ import annotations
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 from src.ui.nav import nav
 nav()
 

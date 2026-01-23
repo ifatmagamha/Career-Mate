@@ -1,11 +1,10 @@
-# src/agents/matcher.py
 from __future__ import annotations
 
 from typing import List, Tuple
 
 from src.config.logging import logger
 from src.matching.vectorizer import (
-    CosineTfidfMatcher,
+    SemanticMatcher,
     build_candidate_text,
     build_offer_text,
 )
@@ -74,7 +73,8 @@ def match_offers(
 
     logger.info(f"[matcher] matching candidate vs {len(offers)} offers")
 
-    tfidf = CosineTfidfMatcher()
+    # Use new Semantic Matcher
+    semantic_matcher = SemanticMatcher()
 
     # --- Candidate representations ---
     candidate_text = build_candidate_text(
@@ -94,9 +94,10 @@ def match_offers(
     ]
     offer_skills_texts = [" ".join(o.skills or []) for o in offers]
 
-    # --- Cosine similarities ---
-    sims_global = tfidf.score(candidate_text, offer_texts)
-    sims_skills = tfidf.score(candidate_skills_text, offer_skills_texts)
+    # --- Semantic similarities ---
+    # Note: embed_query calls may be slow for many offers in loop (optimized in vectorizer if needed)
+    sims_global = semantic_matcher.score(candidate_text, offer_texts)
+    sims_skills = semantic_matcher.score(candidate_skills_text, offer_skills_texts)
 
     # --- Rank by composite similarity ---
     composite = []
@@ -149,8 +150,8 @@ def match_offers(
                 seen.add(m)
 
         reasons = [
-            f"Cosine TF-IDF (global) = {sims_global[idx]:.3f}",
-            f"Cosine TF-IDF (skills) = {sims_skills[idx]:.3f}",
+            f"Semantic Global = {sims_global[idx]:.3f}",
+            f"Semantic Skills = {sims_skills[idx]:.3f}",
             f"Composite = {sim:.3f} (w_global={w_global}, w_skills={w_skills})",
         ]
         if offer.contract_type != "unknown":

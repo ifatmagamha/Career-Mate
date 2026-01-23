@@ -1,4 +1,3 @@
-# src/export/pdf.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -86,3 +85,13 @@ def render_structured_pdf(
 
     c.save()
     return out_path
+
+
+def text_to_pdf(text: str, out_path: str | Path, title: str = "Document"):
+    """
+    Wrapper for compatibility with simple text input.
+    Splits text by newlines and treats them as blocks.
+    """
+    lines = text.split('\n')
+    blocks = [("Content", lines)]
+    return render_structured_pdf(out_path, title, blocks)

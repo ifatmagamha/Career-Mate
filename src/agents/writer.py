@@ -1,6 +1,3 @@
-# src/agents/writer.py
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Dict, Any, Tuple, List
 
@@ -269,4 +266,23 @@ def generate_cv_and_letter_pdfs(
                 ("Lettre", letter_lines)],
     )
 
+
     return cv_pdf, letter_pdf
+
+
+def generate_documents(candidate: CandidateProfile, offer: OfferAnalyzed) -> Tuple[str, str]:
+    """
+    Simpler wrapper that returns text content (Markdown-like) for UI use.
+    Does not write PDFs locally (that is done by generate_cv_and_letter_pdfs).
+    """
+    cv_data = generate_structured_cv(candidate, offer)
+    letter_data = generate_structured_letter(candidate, offer)
+    
+    # Convert JSON data to simple text representation for UI display/edit
+    cv_text = f"TITLE: {cv_data.get('title')}\n\nSUMMARY:\n" + "\n".join(_safe_list(cv_data.get('summary')))
+    cv_text += "\n\nSKILLS:\n" + ", ".join(_safe_list(cv_data.get('skills')))
+    cv_text += "\n\nEXPERIENCE:\n" + "\n".join(_safe_list(cv_data.get('experience')))
+    
+    letter_text = f"SUBJECT: {letter_data.get('subject')}\n\n" + "\n".join(_safe_list(letter_data.get('body')))
+    
+    return cv_text, letter_text

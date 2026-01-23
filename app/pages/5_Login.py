@@ -1,6 +1,8 @@
-# apps/5_Login.py
 from __future__ import annotations
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 import streamlit as st
 
 from src.storage.user_store import create_user, authenticate, get_profile_by_email

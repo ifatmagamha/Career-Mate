@@ -1,12 +1,10 @@
-# src/matching/vectorizer.py
 from __future__ import annotations
 
 import re
 from typing import List, Tuple
 
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 
 def _normalize_text(s: str) -> str:
@@ -36,23 +34,47 @@ def build_candidate_text(cv_text: str, target_keywords: List[str] | None = None,
     return _normalize_text(" ".join(parts))
 
 
-class CosineTfidfMatcher:
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from src.config.settings import settings
+
+class SemanticMatcher:
     """
-    TF-IDF cosine similarity matcher.
-    Fit on [candidate_text] + offer_texts to build a shared vector space.
+    Semantic similarity matcher using Google Gemini Embeddings.
     """
 
     def __init__(self):
-        self.vectorizer = TfidfVectorizer(
-            ngram_range=(1, 2),
-            min_df=1,
-            max_df=0.95,
+        self.embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001",
+            google_api_key=settings.GEMINI_API_KEY
         )
 
     def score(self, candidate_text: str, offer_texts: List[str]) -> List[float]:
-        corpus = [candidate_text] + offer_texts
-        X = self.vectorizer.fit_transform(corpus)
-        cand_vec = X[0:1]
-        offer_vecs = X[1:]
-        sims = cosine_similarity(cand_vec, offer_vecs).flatten()
-        return sims.tolist()
+        if not candidate_text:
+            return [0.0] * len(offer_texts)
+            
+        try:
+            # Optimize: In heavy prod, do batch embedding.
+            # Here simplicity is key.
+            cand_vec = self.embeddings.embed_query(candidate_text)
+            
+            scores = []
+            for t in offer_texts:
+                if not t:
+                    scores.append(0.0)
+                    continue
+                t_vec = self.embeddings.embed_query(t)
+                
+                # Manual Cosine Similarity to avoid sklearn dep if needed, but sklearn is present
+                # Cosine = (A . B) / (||A|| * ||B||)
+                dot_product = np.dot(cand_vec, t_vec)
+                norm_a = np.linalg.norm(cand_vec)
+                norm_b = np.linalg.norm(t_vec)
+                
+                if norm_a == 0 or norm_b == 0:
+                    scores.append(0.0)
+                else:
+                    scores.append(float(dot_product / (norm_a * norm_b)))
+            return scores
+        except Exception as e:
+            # log err
+            return [0.0] * len(offer_texts)

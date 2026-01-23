@@ -1,5 +1,8 @@
-# apps/4_Tracker_Dashboard.py
 from __future__ import annotations
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 from src.ui.nav import nav
 nav()
 
@@ -27,35 +30,40 @@ data = json.loads(p.read_text(encoding="utf-8"))
 if not isinstance(data, list):
     data = []
 
-df = pd.DataFrame(data) if data else pd.DataFrame(columns=["title", "company", "score", "status", "url"])
+st.subheader("Applications (Kanban Board)")
 
-st.subheader("Applications")
-st.dataframe(df[["status", "score", "title", "company", "url"]] if not df.empty else df, use_container_width=True)
-
-st.divider()
-st.subheader("Update status")
+# Kanban Board
+from src.ui.components import render_kanban_column
 
 if df.empty:
     st.info("No tracked offers yet. Run Job Search first (it auto-saves matches into tracker).")
     st.stop()
 
+# Group by status
+status_cols = st.columns(4)
+statuses = ["saved", "applied", "interview", "rejected"]
+colors = ["#6366f1", "#f59e0b", "#10b981", "#ef4444"] # Indigo, Amber, Emerald, Red
+
+for i, status in enumerate(statuses):
+    with status_cols[i]:
+        # Filter jobs for this status
+        jobs_in_status = df[df["status"] == status].to_dict('records')
+        render_kanban_column(status.upper(), jobs_in_status, status, colors[i])
+
+st.divider()
+
+# Quick Update Form (Legacy simplified, could be better integrated)
+st.caption("Admin (Quick Status Update)")
 idx = st.selectbox(
-    "Pick an entry",
+    "Pick an entry to move",
     options=list(range(len(df))),
-    format_func=lambda i: f"{df.iloc[i]['status']} — {df.iloc[i]['score']} — {df.iloc[i]['title']}",
+    format_func=lambda i: f"{df.iloc[i]['status']} — {df.iloc[i]['title']}",
 )
-
-new_status = st.selectbox("New status", ["saved", "applied", "interview", "rejected"], index=0)
-
-if st.button("Update"):
+new_status = st.selectbox("New status", statuses, index=0)
+if st.button("Move"):
     now = datetime.utcnow().isoformat() + "Z"
     data[idx]["status"] = new_status
     data[idx]["updated_at"] = now
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    st.success("Updated ✅")
+    st.success("Moved ✅")
     st.rerun()
-
-st.divider()
-st.subheader("Quick stats")
-if not df.empty:
-    st.write(df["status"].value_counts())
