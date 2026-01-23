@@ -1,4 +1,3 @@
-# src/graph/state.py
 from __future__ import annotations
 
 from typing import TypedDict, List, Dict, Optional, Any
@@ -6,7 +5,14 @@ from src.schemas.job_offer import OfferRaw, OfferAnalyzed, MatchResult
 from src.schemas.candidate import CandidateProfile
 
 
+from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
+from typing import Annotated
+
 class RecruitAIState(TypedDict, total=False):
+    # Chat History
+    messages: Annotated[List[BaseMessage], add_messages]
+    
     # Inputs user
     query: str
     location: str

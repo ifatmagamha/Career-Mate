@@ -1,4 +1,3 @@
-# src/agents/collector.py
 from __future__ import annotations
 
 from typing import List, Optional
@@ -105,12 +104,18 @@ def _is_probably_job_posting(link: str) -> bool:
 
 def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]:
     """
-    Collect ONLY internship offers using Google Custom Search API.
+    Collect job offers using Google Custom Search API.
     Returns OfferRaw list (deduped by URL), filtered to likely job postings.
     """
 
-    # Internship-only query
-    q = f'{query} {location} (stage OR internship OR intern OR stagiaire)'
+    # Detect if user specifically wants internships
+    is_internship_request = any(w in query.lower() for w in ["stage", "intern", "stagiaire", "apprenticeship", "alternance"])
+    
+    if is_internship_request:
+        q = f'{query} {location} (stage OR internship OR intern OR stagiaire)'
+    else:
+        # General job search
+        q = f'"{query}" job hiring {location}'
 
     items: List[OfferRaw] = []
     seen_urls = set()
@@ -130,7 +135,15 @@ def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]
             "start": start,
         }
 
-        data = get_json(GOOGLE_CSE_ENDPOINT, params=params)
+        try:
+            data = get_json(GOOGLE_CSE_ENDPOINT, params=params)
+        except Exception as e:
+            msg = str(e).lower()
+            if "403" in msg or "forbidden" in msg:
+                logger.warning(f"[collector] Google Search quota exceeded (403). Using mock data.")
+                return _get_mock_failed_search_offers(query, limit)
+            logger.error(f"[collector] Search error: {e}")
+            break
         results = data.get("items", []) or []
         if not results:
             break
@@ -148,8 +161,8 @@ def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]
             if _looks_like_login_or_gate(title, snippet, link):
                 continue
 
-            # Must be internship (title/snippet/url)
-            if not _is_internship(title, snippet, link):
+            # Must be internship ONLY if specifically requested
+            if is_internship_request and not _is_internship(title, snippet, link):
                 continue
 
             # Must look like a job posting
@@ -192,3 +205,28 @@ def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]
 
     logger.info(f"[collector] collected={len(items)}")
     return items
+
+
+def _get_mock_failed_search_offers(query: str, limit: int) -> List[OfferRaw]:
+    """Fallback when API quota is dead."""
+    logger.warning("Returning 5 mock offers for demo purposes.")
+    defaults = [
+        {"title": "Python Developer Intern", "company": "TechCorp", "location": "Paris"},
+        {"title": "Data Scientist Internship", "company": "AI Solutions", "location": "Remote"},
+        {"title": "Backend Engineering Intern", "company": "CloudSystems", "location": "Lyon"},
+        {"title": "Full Stack Intern (React/Django)", "company": "WebAgency", "location": "Paris"},
+        {"title": "Machine Learning Intern", "company": "DeepMind-ish", "location": "London"},
+    ]
+    
+    out = []
+    for i, d in enumerate(defaults):
+        if i >= limit: break
+        out.append(OfferRaw(
+            source="mock_fallback",
+            title=d["title"],
+            company=d["company"],
+            location=d["location"],
+            description=f"Mock description for {d['title']}. Requires Python, Docker, RAG skills.",
+            url=f"https://mock-job.com/{i}",
+        ))
+    return out

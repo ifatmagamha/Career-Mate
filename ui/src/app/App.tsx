@@ -1,0 +1,151 @@
+import { useState } from 'react';
+import { ChatView } from '@/app/components/ChatView';
+import { JobExplorer } from '@/app/components/JobExplorer';
+import { JobDetail } from '@/app/components/JobDetail';
+import { GeneratorView } from '@/app/components/GeneratorView';
+import { ProfileView } from '@/app/components/ProfileView';
+import { AgentDashboard } from '@/app/components/AgentDashboard';
+import {
+  Home,
+  Briefcase,
+  FileText,
+  User,
+  Sparkles,
+  Activity
+} from 'lucide-react';
+
+type View = 'home' | 'jobs' | 'generator' | 'profile' | 'agents' | 'jobDetail';
+
+interface Job {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  salary: string;
+  type: string;
+  matchScore: number;
+  description: string;
+  requirements: string[];
+  benefits: string[];
+  postedDate: string;
+  stage?: 'wishlist' | 'applied' | 'interviewing' | 'offer';
+}
+
+function App() {
+  const [currentView, setCurrentView] = useState<View>('home');
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+
+  const handleJobSelect = (job: Job) => {
+    setSelectedJob(job);
+    setCurrentView('jobDetail');
+  };
+
+  const handleBackToJobs = () => {
+    setCurrentView('jobs');
+    setSelectedJob(null);
+  };
+
+  const renderView = () => {
+    switch (currentView) {
+      case 'home':
+        return <ChatView onNavigateToJobs={() => setCurrentView('jobs')} />;
+      case 'jobs':
+        return <JobExplorer onJobSelect={handleJobSelect} />;
+      case 'jobDetail':
+        return <JobDetail job={selectedJob} onBack={handleBackToJobs} />;
+      case 'generator':
+        return <GeneratorView />;
+      case 'profile':
+        return <ProfileView />;
+      case 'agents':
+        return <AgentDashboard />;
+      default:
+        return <ChatView onNavigateToJobs={() => setCurrentView('jobs')} />;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-black text-white">
+      {/* Top Navigation */}
+      <nav className="border-b border-zinc-800 bg-black/50 backdrop-blur-sm fixed top-0 left-0 right-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            {/* Logo */}
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-blue-500 rounded-lg flex items-center justify-center">
+                <Sparkles className="w-5 h-5 text-white" />
+              </div>
+              <span className="text-xl font-semibold">Career Mate AI</span>
+            </div>
+
+            {/* Navigation Tabs */}
+            <div className="flex items-center gap-2">
+              <NavButton
+                icon={<Home className="w-4 h-4" />}
+                label="Home"
+                active={currentView === 'home'}
+                onClick={() => setCurrentView('home')}
+              />
+              <NavButton
+                icon={<Briefcase className="w-4 h-4" />}
+                label="Job Explorer"
+                active={currentView === 'jobs' || currentView === 'jobDetail'}
+                onClick={() => setCurrentView('jobs')}
+              />
+              <NavButton
+                icon={<FileText className="w-4 h-4" />}
+                label="AI Generator"
+                active={currentView === 'generator'}
+                onClick={() => setCurrentView('generator')}
+              />
+              <NavButton
+                icon={<User className="w-4 h-4" />}
+                label="Profile"
+                active={currentView === 'profile'}
+                onClick={() => setCurrentView('profile')}
+              />
+              <NavButton
+                icon={<Activity className="w-4 h-4" />}
+                label="Agents"
+                active={currentView === 'agents'}
+                onClick={() => setCurrentView('agents')}
+              />
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      {/* Main Content */}
+      <main className="pt-16">
+        {renderView()}
+      </main>
+    </div>
+  );
+}
+
+interface NavButtonProps {
+  icon: React.ReactNode;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}
+
+function NavButton({ icon, label, active, onClick }: NavButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={`
+        flex items-center gap-2 px-4 py-2 rounded-lg transition-all
+        ${active
+          ? 'bg-white text-black'
+          : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
+        }
+      `}
+    >
+      {icon}
+      <span className="text-sm font-medium">{label}</span>
+    </button>
+  );
+}
+
+export default App;
