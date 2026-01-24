@@ -54,29 +54,46 @@ def stats_node(state: RecruitAIState) -> dict:
     
     try:
         df = load_jobs_dataframe()
-        if df.empty:
-            duration = (time.time() - start_time) * 1000
-            log_agent_trace("Stats", query, "No data available", duration)
-            return {"messages": [AIMessage(content="I have no job data available to analyze right now.")]}
-
-        # Create the agent
-        agent = create_pandas_dataframe_agent(
-            llm,
-            df,
-            verbose=True,
-            allow_dangerous_code=True,
-            agent_type="tool-calling",
-            max_iterations=5,
-        )
         
-        response = agent.invoke({"input": query})
-        output_text = response["output"]
+        # If it's a general tech trend question, let's use the LLM directly for better context
+        general_keywords = ["market", "trend", "salary", "future", "outlook", "tech", "jobs"]
+        is_general = any(k in query.lower() for k in general_keywords)
+        
+        if df.empty or is_general:
+            # Fallback/General mode
+            logger.info("[stats_agent] Using general knowledge fallback.")
+            prompt = f"""
+            You are a Career Data Analyst. 
+            User Query: {query}
+            
+            Based on your broad knowledge of the current tech market (and the fact that my local database has {len(df)} jobs currently),
+            provide a helpful, data-driven answer. 
+            If the query is about specific trends, offer insights into which skills are currently in demand.
+            """
+            res = llm.invoke(prompt)
+            output_text = res.content
+            # Create the data-explorer agent for specific local queries
+            # System hint to ensure it knows how to handle the dataframe
+            prefix = "You are a specialized data analyst exploring a job dataset stored in a variable named 'df'. " \
+                     "When asked for counts or distributions, use pandas operations on 'df'."
+
+            agent = create_pandas_dataframe_agent(
+                llm,
+                df,
+                verbose=True,
+                allow_dangerous_code=True,
+                agent_type="tool-calling",
+                max_iterations=5,
+                prefix=prefix
+            )
+            response = agent.invoke({"input": query})
+            output_text = response["output"]
         
         duration = (time.time() - start_time) * 1000
         log_agent_trace("Stats", query, output_text, duration)
         
         logger.info(f"[stats_agent] Result: {output_text}")
-        return {"messages": [AIMessage(content=output_text)]}
+        return {"messages": [AIMessage(content=output_text)], "active_node": "stats"}
     except Exception as e:
         duration = (time.time() - start_time) * 1000
         log_agent_trace("Stats", query, str(e), duration, status="error")

@@ -1,6 +1,6 @@
 from __future__ import annotations
-
 from langgraph.graph import StateGraph, END
+from langchain_core.messages import AIMessage, HumanMessage
 
 from src.graph.state import RecruitAIState
 from src.graph.nodes import node_collect, node_analyze, node_match, node_write, node_track, node_report_matches
@@ -8,11 +8,38 @@ from src.graph.router import route_request
 from src.agents.rag_agent import rag_node
 from src.agents.stats_agent import stats_node
 
-# Simple Chat Node for "general_chat"
-from langchain_core.messages import AIMessage
 def node_chat(state: RecruitAIState):
-    # Fallback chat if no specific agent
-    return {"messages": [AIMessage(content="I can help you search for jobs or answer questions about your profile. automated chat is not fully implemented yet.")]}
+    """Conversational fallback using the LLM."""
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from src.config.settings import settings
+    
+    chat_llm = ChatGoogleGenerativeAI(
+        model=settings.GEMINI_MODEL,
+        google_api_key=settings.GEMINI_API_KEY,
+        temperature=0.4
+    )
+    
+    messages = state.get("messages", [])
+    if not messages:
+        return {"messages": [AIMessage(content="Hello! How can I help you today?")]}
+    
+    last_query = messages[-1].content
+    
+    prompt = f"""
+    You are RecruitAI, a helpful assistant for job seekers.
+    The user said: "{last_query}"
+    
+    Provide a helpful, friendly, and concise response. 
+    Mention that you can help them:
+    1. Search and match job offers.
+    2. Answer questions about their CV (RAG).
+    3. Provide market statistics on job offers.
+    
+    Keep it brief.
+    """
+    
+    res = chat_llm.invoke(prompt)
+    return {"messages": [res], "active_node": "chat"}
 
 def build_recruit_graph():
     g = StateGraph(RecruitAIState)

@@ -12,6 +12,7 @@ class CandidateProfile(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     location: Optional[str] = None
+    social_links: List[str] = Field(default_factory=list, description="Social account URLs")
 
     # IMPORTANT: on garde le CV en texte brut (ex: contenu PDF déjà extrait ou copié-collé)
     cv_text: str = Field("", description="CV du candidat en texte brut")
@@ -22,6 +23,10 @@ class CandidateProfile(BaseModel):
     
     # Editable Fields (Added for Profile Editor)
     summary: Optional[str] = None
-    skills: List[str] = Field(default_factory=list)
+    skills: List[str] = Field(default_factory=list, description="Hard skills")
+    soft_skills: List[str] = Field(default_factory=list, description="Soft skills and languages")
     experience: List[dict] = Field(default_factory=list, description="List of role objects")
     education: List[dict] = Field(default_factory=list, description="List of education objects")
+    projects: List[dict] = Field(default_factory=list, description="Academic or professional projects")
+    certifications: List[dict] = Field(default_factory=list, description="Obtained certificates")
+    volunteer_experience: List[dict] = Field(default_factory=list, description="Volunteer roles")

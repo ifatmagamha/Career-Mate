@@ -196,46 +196,80 @@ Assurer le suivi des candidatures dans le temps.
 
 ---
 
-## 8. Orchestration (LangGraph)
+## 8. Agent Router
+
+**Fichier :** `src/agents/router.py`
+
+### Rôle
+Déterminer l'intention de l'utilisateur et diriger la requête vers le bon agent ou workflow.
+
+### Intentions supportées
+- `job_pipeline` : Recherche et analyse d'offres d'emploi.
+- `rag_agent` : Questions sur le CV ou le profil de l'utilisateur.
+- `stats_agent` : Requêtes statistiques sur les offres d'emploi collectées.
+- `general_chat` : Conversation générale ou aide.
+
+### Méthode
+- Utilisation de Gemini-Flash avec un prompt structuré.
+- Fallback par expressions régulières si le LLM échoue à produire un JSON valide.
+
+---
+
+## 9. Agent RAG (Retrieval-Augmented Generation)
+
+**Fichier :** `src/agents/rag_agent.py`
+
+### Rôle
+Répondre à des questions spécifiques sur le profil du candidat en utilisant une base de connaissances vectorielle.
+
+### Stratégie de Chunking
+Pour assurer une récupération précise des informations du CV, nous utilisons le **`RecursiveCharacterTextSplitter`** :
+- **Chunk Size :** 1000 caractères.
+- **Overlap :** 100 caractères.
+- **Rationale :** Ce splitter préserve mieux la structure sémantique (paragraphes, listes à puces) que les splitters par taille fixe ou purement sémantiques qui peuvent perdre le contexte des sections de CV.
+
+### Stockage Vectoriel
+- **Moteur :** FAISS (In-Memory).
+- **Embeddings :** `models/embedding-001` (Google).
+- **Emplacement :** `data/faiss_index/`. Ce dossier contient l'index binaire et les métadonnées permettant des recherches de similarité ultra-rapides sans base de données externe.
+
+---
+
+## 10. Agent Stats
+
+**Fichier :** `src/agents/stats_agent.py`
+
+### Rôle
+Effectuer des analyses de données sur les offres d'emploi analysées (`job_offers_analyzed.json`).
+
+### Fonctionnement
+- Utilise **Pandas** pour charger les données structurées.
+- Exploite le `create_pandas_dataframe_agent` de LangChain.
+- Permet de répondre à des questions comme "Quel est le salaire moyen ?", "Combien d'offres en télétravail ?", etc.
+
+---
+
+## 11. Orchestration (LangGraph)
 
 **Fichier :** `src/graph/build_graph.py`
 
 ### Objectif
 Relier les agents dans un workflow explicite et contrôlé.
 
-### État partagé
-- profil candidat
-- offres collectées
-- offres analysées
-- résultats de matching
-- documents générés
-
-### Avantages
-- Pipeline lisible
-- Débogage facilité
-- Valeur académique forte (systèmes agentiques)
+### État partagé (`RecruitAIState`)
+- `messages` : Historique de la conversation.
+- `candidate` : Profil structuré du candidat.
+- `query` : Requête de l'utilisateur.
+- `job_offers` : Liste des offres brutes/analysées.
+- `matches` : Résultats du matching.
 
 ---
 
-## 9. Fichiers générés
+## 12. Conclusion
 
-Après exécution complète :
-
-- `data/job_offers_raw.json`
-- `data/job_offers_analyzed.json`
-- `data/matches.json`
-- `data/generated/{user_id}_cv.pdf`
-- `data/generated/{user_id}_lettre.pdf`
-- `data/tracking.json`
-
----
-
-## 10. Conclusion
-
-RecruitAI implémente une architecture multi-agent réaliste et maîtrisée :
-- LLM utilisé uniquement là où il apporte de la valeur
-- Matching déterministe et explicable
-- Documents générés automatiquement et prêts à l’envoi
-- Application exploitable via une interface Streamlit
+RecruitAI implémente une architecture multi-agent moderne et robuste :
+- **Hybride :** Combine des agents LLM (Router, Analyzer, RAG) et des agents déterministes (Collector, Matcher).
+- **RAG Optimisé :** Utilise un chunking intelligent pour le traitement de documents RH.
+- **Data-Driven :** Intègre une capacité d'analyse statistique en temps réel sur le marché de l'emploi.
 
 

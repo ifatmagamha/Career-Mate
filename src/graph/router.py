@@ -44,15 +44,23 @@ def route_request(state: RecruitAIState) -> Literal["job_pipeline", "rag_agent",
         response = llm.invoke(final_prompt)
         content = response.content.strip().lower()
         
-        # Simple string matching
-        if "job" in content or "pipeline" in content:
-            decision = "job_pipeline"
-        elif "rag" in content or "profile" in content or "cv" in content or "resume" in content:
+        # Refined Decision Logic
+        if any(w in content for w in ["search", "find", "look for", "offers", "jobs", "pipeline"]):
+             decision = "job_pipeline"
+        elif any(w in content for w in ["cv", "resume", "profile", "my experience", "my skills", "rag"]):
              decision = "rag_agent"
-        elif "stats" in content or "count" in content or "salary" in content or "market" in content:
+        elif any(w in content for w in ["how many", "count", "average", "stats", "salary", "market", "distribution", "distribution", "percentage"]):
              decision = "stats_agent"
         else:
              decision = "general_chat"
+             
+        # Priority override based on ORIGINAL query
+        if any(w in query.lower() for w in ["how many", "count", "average", "median", "percentage", "distribution"]):
+            decision = "stats_agent"
+        
+        # If LLM explicitly said rag_agent, respect that more than general_chat
+        if "rag" in content or "profile" in content or "cv" in content:
+            decision = "rag_agent"
              
         duration = (time.time() - start_time) * 1000
         log_agent_trace("Router", query, f"Routed to {decision}", duration)

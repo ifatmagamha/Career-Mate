@@ -112,10 +112,11 @@ def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]
     is_internship_request = any(w in query.lower() for w in ["stage", "intern", "stagiaire", "apprenticeship", "alternance"])
     
     if is_internship_request:
-        q = f'{query} {location} (stage OR internship OR intern OR stagiaire)'
+        q = f'{query} {location} (intern OR internship OR stage OR stagiaire OR apprenticeship OR alternance)'
     else:
-        # General job search
-        q = f'"{query}" job hiring {location}'
+        # General job search: remove strict quotes to be more flexible
+        # Add "hiring" and "career" to find actual postings
+        q = f'{query} {location} (job OR hiring OR opening OR career OR recruitment)'
 
     items: List[OfferRaw] = []
     seen_urls = set()
@@ -208,14 +209,22 @@ def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]
 
 
 def _get_mock_failed_search_offers(query: str, limit: int) -> List[OfferRaw]:
-    """Fallback when API quota is dead."""
-    logger.warning("Returning 5 mock offers for demo purposes.")
+    """Fallback when API quota is dead. Generates dynamic mock data from query."""
+    logger.warning(f"Using Query-Injected Mock Data for: {query}")
+    
+    # Try to extract location if not provided
+    q_lower = query.lower()
+    
+    # Dynamic titles based on query
+    keywords = [w.capitalize() for w in query.split() if len(w) > 3]
+    main_kw = keywords[0] if keywords else "Software"
+    
     defaults = [
-        {"title": "Python Developer Intern", "company": "TechCorp", "location": "Paris"},
-        {"title": "Data Scientist Internship", "company": "AI Solutions", "location": "Remote"},
-        {"title": "Backend Engineering Intern", "company": "CloudSystems", "location": "Lyon"},
-        {"title": "Full Stack Intern (React/Django)", "company": "WebAgency", "location": "Paris"},
-        {"title": "Machine Learning Intern", "company": "DeepMind-ish", "location": "London"},
+        {"title": f"Senior {main_kw} Specialist", "company": "GlobalTech", "location": "Paris"},
+        {"title": f"{main_kw} Associate", "company": "Innovate AI", "location": "Remote"},
+        {"title": f"Lead {main_kw} Developer", "company": "DataFlow", "location": "Lyon"},
+        {"title": f"{main_kw} Internship", "company": "Startup Hub", "location": "Paris"},
+        {"title": f"Consultant {main_kw}", "company": "Advisory Corp", "location": "London"},
     ]
     
     out = []
@@ -226,7 +235,12 @@ def _get_mock_failed_search_offers(query: str, limit: int) -> List[OfferRaw]:
             title=d["title"],
             company=d["company"],
             location=d["location"],
-            description=f"Mock description for {d['title']}. Requires Python, Docker, RAG skills.",
-            url=f"https://mock-job.com/{i}",
+            description=(
+                f"We are looking for a {d['title']} at {d['company']}. "
+                f"MISSIONS: Development of {main_kw} systems, deployment with Docker/Kubernetes, and performance optimization. "
+                f"REQUIREMENTS: Expertise in {main_kw}, mastery of Python/SQL, and at least 2 years of relevant experience. "
+                f"BENEFITS: Competitive salary, remote work options, and health insurance."
+            ),
+            url=f"https://mock-job-results.com/{i}?q={query.replace(' ', '+')}",
         ))
     return out

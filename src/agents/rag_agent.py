@@ -60,7 +60,11 @@ def rag_node(state: RecruitAIState) -> dict:
         duration = (time.time() - start_time) * 1000
         log_agent_trace("RAG", query, response.content, duration)
         
-        return {"messages": [response]}
+        return {
+            "messages": [response],
+            "retrieved_chunks": context_parts,
+            "active_node": "rag"
+        }
     except Exception as e:
         duration = (time.time() - start_time) * 1000
         log_agent_trace("RAG", query, str(e), duration, status="error")

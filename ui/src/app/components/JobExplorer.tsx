@@ -25,6 +25,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]); // Real jobs
+  const [systemStats, setSystemStats] = useState<any>(null);
 
   const triggerSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -54,8 +55,10 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
 
   const fetchLatestJobs = async () => {
     try {
-      // We added a helper endpoint or just read 'job_offers_analyzed.json' / 'matches.json'
-      // For MVP, we can reuse /api/jobs if we update it to read from the matches.json
+      const sRes = await fetch('http://localhost:8000/api/system/stats');
+      const sData = await sRes.json();
+      setSystemStats(sData);
+
       const res = await fetch('http://localhost:8000/api/jobs');
       const data = await res.json();
       // Transform backend data to UI format
@@ -64,12 +67,12 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
         title: j.title || "Untitled",
         company: j.company || "Unknown",
         location: j.location || "Remote",
-        salary: "Competitive", // Analyzer might extract this later
-        type: "Full-time",
-        matchScore: j.matchScore || Math.floor(Math.random() * 20 + 70), // Fallback if no matching run
-        postedDate: "Today",
+        salary: j.salary || "Competitive",
+        type: j.type || "Full-time",
+        matchScore: j.matchScore || Math.floor(Math.random() * 20 + 70),
+        postedDate: j.postedDate || "Today",
         tags: j.skills || [],
-        description: j.summary || j.description || "",
+        description: j.description || j.summary || "",
         requirements: j.requirements || [],
         benefits: [],
         url: j.url
@@ -95,19 +98,34 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Header */}
-      <div className="mb-8 flex justify-between items-end">
+      <div className="mb-8 flex justify-between items-end border-b border-zinc-800 pb-6">
         <div>
           <h1 className="text-3xl font-bold mb-2 text-white">Job Explorer</h1>
           <p className="text-zinc-400">AI-powered search & matching</p>
         </div>
-        <div className="text-right">
-          <div className="text-xs text-zinc-500 mb-1">Active Agents</div>
-          <div className="flex gap-2">
-            <span className="px-2 py-0.5 bg-blue-900/40 text-blue-400 text-xs rounded border border-blue-800">Collector</span>
-            <span className="px-2 py-0.5 bg-blue-900/40 text-blue-400 text-xs rounded border border-blue-800">Analyzer</span>
-            <span className="px-2 py-0.5 bg-blue-900/40 text-blue-400 text-xs rounded border border-blue-800">Matcher</span>
+
+        {systemStats && (
+          <div className="hidden lg:flex gap-6 text-right">
+            <div className="border-r border-zinc-800 pr-6">
+              <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Storage Status</p>
+              <p className="text-xs text-white">
+                <span className="text-blue-400">{systemStats.raw_count}</span> Raw | <span className="text-green-400">{systemStats.matches_count}</span> Hits
+              </p>
+            </div>
+            <div className="border-r border-zinc-800 pr-6">
+              <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Last Pipeline Run</p>
+              <p className="text-xs text-zinc-400">{systemStats.last_updated.replace(/-/g, '/')}</p>
+            </div>
+            <div>
+              <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1 text-center">Active Agents</div>
+              <div className="flex gap-1">
+                <span className="px-1.5 py-0.5 bg-blue-900/40 text-blue-400 text-[10px] rounded border border-blue-800">Collector</span>
+                <span className="px-1.5 py-0.5 bg-blue-900/40 text-blue-400 text-[10px] rounded border border-blue-800">Analyzer</span>
+                <span className="px-1.5 py-0.5 bg-blue-900/40 text-blue-400 text-[10px] rounded border border-blue-800">Matcher</span>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Search Bar */}

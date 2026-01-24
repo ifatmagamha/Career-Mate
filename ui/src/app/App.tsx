@@ -34,6 +34,7 @@ interface Job {
 function App() {
   const [currentView, setCurrentView] = useState<View>('home');
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [initialJobDescription, setInitialJobDescription] = useState<string>('');
 
   const handleJobSelect = (job: Job) => {
     setSelectedJob(job);
@@ -45,6 +46,11 @@ function App() {
     setSelectedJob(null);
   };
 
+  const handleGenerateFromJob = (desc: string) => {
+    setInitialJobDescription(desc);
+    setCurrentView('generator');
+  };
+
   const renderView = () => {
     switch (currentView) {
       case 'home':
@@ -52,9 +58,13 @@ function App() {
       case 'jobs':
         return <JobExplorer onJobSelect={handleJobSelect} />;
       case 'jobDetail':
-        return <JobDetail job={selectedJob} onBack={handleBackToJobs} />;
+        return <JobDetail
+          job={selectedJob}
+          onBack={handleBackToJobs}
+          onGenerateCoverLetter={handleGenerateFromJob}
+        />;
       case 'generator':
-        return <GeneratorView />;
+        return <GeneratorView initialDescription={initialJobDescription} />;
       case 'profile':
         return <ProfileView />;
       case 'agents':

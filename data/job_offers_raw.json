@@ -1,42 +1,42 @@
 [
   {
     "source": "mock_fallback",
-    "title": "Python Developer Intern",
-    "company": "TechCorp",
+    "title": "Senior Fours Specialist",
+    "company": "GlobalTech",
     "location": "Paris",
-    "description": "Mock description for Python Developer Intern. Requires Python, Docker, RAG skills.",
-    "url": "https://mock-job.com/0"
+    "description": "We are looking for a Senior Fours Specialist at GlobalTech. MISSIONS: Development of Fours systems, deployment with Docker/Kubernetes, and performance optimization. REQUIREMENTS: Expertise in Fours, mastery of Python/SQL, and at least 2 years of relevant experience. BENEFITS: Competitive salary, remote work options, and health insurance.",
+    "url": "https://mock-job-results.com/0?q=in+the+big+fours"
   },
   {
     "source": "mock_fallback",
-    "title": "Data Scientist Internship",
-    "company": "AI Solutions",
+    "title": "Fours Associate",
+    "company": "Innovate AI",
     "location": "Remote",
-    "description": "Mock description for Data Scientist Internship. Requires Python, Docker, RAG skills.",
-    "url": "https://mock-job.com/1"
+    "description": "We are looking for a Fours Associate at Innovate AI. MISSIONS: Development of Fours systems, deployment with Docker/Kubernetes, and performance optimization. REQUIREMENTS: Expertise in Fours, mastery of Python/SQL, and at least 2 years of relevant experience. BENEFITS: Competitive salary, remote work options, and health insurance.",
+    "url": "https://mock-job-results.com/1?q=in+the+big+fours"
   },
   {
     "source": "mock_fallback",
-    "title": "Backend Engineering Intern",
-    "company": "CloudSystems",
+    "title": "Lead Fours Developer",
+    "company": "DataFlow",
     "location": "Lyon",
-    "description": "Mock description for Backend Engineering Intern. Requires Python, Docker, RAG skills.",
-    "url": "https://mock-job.com/2"
+    "description": "We are looking for a Lead Fours Developer at DataFlow. MISSIONS: Development of Fours systems, deployment with Docker/Kubernetes, and performance optimization. REQUIREMENTS: Expertise in Fours, mastery of Python/SQL, and at least 2 years of relevant experience. BENEFITS: Competitive salary, remote work options, and health insurance.",
+    "url": "https://mock-job-results.com/2?q=in+the+big+fours"
   },
   {
     "source": "mock_fallback",
-    "title": "Full Stack Intern (React/Django)",
-    "company": "WebAgency",
+    "title": "Fours Internship",
+    "company": "Startup Hub",
     "location": "Paris",
-    "description": "Mock description for Full Stack Intern (React/Django). Requires Python, Docker, RAG skills.",
-    "url": "https://mock-job.com/3"
+    "description": "We are looking for a Fours Internship at Startup Hub. MISSIONS: Development of Fours systems, deployment with Docker/Kubernetes, and performance optimization. REQUIREMENTS: Expertise in Fours, mastery of Python/SQL, and at least 2 years of relevant experience. BENEFITS: Competitive salary, remote work options, and health insurance.",
+    "url": "https://mock-job-results.com/3?q=in+the+big+fours"
   },
   {
     "source": "mock_fallback",
-    "title": "Machine Learning Intern",
-    "company": "DeepMind-ish",
+    "title": "Consultant Fours",
+    "company": "Advisory Corp",
     "location": "London",
-    "description": "Mock description for Machine Learning Intern. Requires Python, Docker, RAG skills.",
-    "url": "https://mock-job.com/4"
+    "description": "We are looking for a Consultant Fours at Advisory Corp. MISSIONS: Development of Fours systems, deployment with Docker/Kubernetes, and performance optimization. REQUIREMENTS: Expertise in Fours, mastery of Python/SQL, and at least 2 years of relevant experience. BENEFITS: Competitive salary, remote work options, and health insurance.",
+    "url": "https://mock-job-results.com/4?q=in+the+big+fours"
   }
 ]

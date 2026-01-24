@@ -33,6 +33,9 @@ class OfferAnalyzed(BaseModel):
     contract_type: ContractType = "unknown"
     seniority: Seniority = "unknown"
 
+    salary: Optional[str] = "Competitive"
+    postedDate: Optional[str] = "Today"
+
     skills: List[str] = Field(default_factory=list, description="Compétences techniques & outils (liste normalisée)")
     missions: List[str] = Field(default_factory=list, description="Missions/responsabilités (phrases courtes)")
     requirements: List[str] = Field(default_factory=list, description="Critères/conditions (phrases courtes)")
@@ -49,6 +52,8 @@ class MatchResult(BaseModel):
     title: str
     company: Optional[str] = None
     location: Optional[str] = None
+    salary: Optional[str] = "Competitive"
+    postedDate: Optional[str] = "Today"
 
     score: int = Field(ge=0, le=100, description="Score de matching 0..100")
     reasons: List[str] = Field(default_factory=list, description="Pourquoi ça match (bullet points)")

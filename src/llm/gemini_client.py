@@ -59,18 +59,16 @@ class GeminiClient:
         return response.text or ""
 
     def _fallback_model(self) -> str:
-        try:
-            # Listing might be different in new SDK, keeping it simple or skipping fallback logic if complex
-            # For now, just return a safe default if list fails
-            return "gemini-2.0-flash" 
-        except Exception as e:
-            logger.warning(f"[gemini] fallback list error: {e}")
-            return self.model_name
+        # If the current model is already the fallback, try the opposite
+        if "gemini-2.0-flash" in self.model_name:
+            return "gemini-1.5-flash"
+        return "gemini-2.0-flash"
 
     def generate_text(
         self,
         prompt: str,
         *,
+        model: str | None = None,
         temperature: float = 0.2,
         max_output_tokens: int = 1024,
         retries: int = 3,
@@ -78,19 +76,25 @@ class GeminiClient:
         # try configured model with retry/backoff on 429
         backoff = 1.2
         last_err: Exception | None = None
+        
+        # Determine initial model
+        current_model = model or self.model_name
+        if current_model and not current_model.startswith("models/"):
+            current_model = f"models/{current_model}"
 
         for attempt in range(1, retries + 1):
             try:
-                return self._try_generate(self.model_name, prompt, temperature, max_output_tokens)
+                return self._try_generate(current_model, prompt, temperature, max_output_tokens)
             except Exception as e:
                 last_err = e
                 msg = str(e).lower()
 
-                # Model unavailable -> fallback once
+                # Model unavailable (404/Unsupported) -> fallback
                 if "not found" in msg or "is not supported" in msg or "404" in msg:
                     fb = self._fallback_model()
-                    logger.warning(f"[gemini] model '{self.model_name}' unavailable -> fallback to '{fb}'")
+                    logger.warning(f"[gemini] model '{current_model}' unavailable -> fallback to '{fb}'")
                     self.model_name = fb
+                    current_model = f"models/{fb}"
                     continue
 
                 # Quota/rate limit -> backoff

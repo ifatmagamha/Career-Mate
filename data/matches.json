@@ -1,102 +1,107 @@
 [
   {
-    "url": "https://mock-job.com/1",
-    "title": "Data Scientist Internship",
-    "company": "AI Solutions",
-    "location": "Remote",
-    "score": 42,
-    "reasons": [
-      "Semantic Global = 0.707",
-      "Semantic Skills = 0.000",
-      "Composite = 0.424 (w_global=0.6, w_skills=0.4)"
-    ],
-    "missing_skills": [
-      "Docker"
-    ],
-    "strong_points": [
-      "Skills match: Python, RAG"
-    ]
-  },
-  {
-    "url": "https://mock-job.com/4",
-    "title": "Machine Learning Intern",
-    "company": "DeepMind-ish",
+    "url": "https://mock-job-results.com/4?q=in+the+big+fours",
+    "title": "Consultant Fours",
+    "company": "Advisory Corp",
     "location": "London",
-    "score": 42,
+    "salary": "Competitive",
+    "postedDate": "Today",
+    "score": 37,
     "reasons": [
-      "Semantic Global = 0.704",
+      "Semantic Global = 0.614",
       "Semantic Skills = 0.000",
-      "Composite = 0.422 (w_global=0.6, w_skills=0.4)",
-      "Contract type: internship",
-      "Seniority: intern"
+      "Composite = 0.369 (w_global=0.6, w_skills=0.4)"
     ],
     "missing_skills": [
-      "Machine Learning",
-      "Docker"
+      "Kubernetes"
     ],
     "strong_points": [
-      "Skills match: Python, RAG",
-      "Keywords overlap: for, python, rag, skills"
+      "Skills match: Python, SQL, Docker",
+      "Keywords overlap: corp, with, docker, and, python"
     ]
   },
   {
-    "url": "https://mock-job.com/0",
-    "title": "Python Developer Intern",
-    "company": "TechCorp",
-    "location": "Paris",
-    "score": 42,
-    "reasons": [
-      "Semantic Global = 0.694",
-      "Semantic Skills = 0.000",
-      "Composite = 0.417 (w_global=0.6, w_skills=0.4)"
-    ],
-    "missing_skills": [
-      "Docker"
-    ],
-    "strong_points": [
-      "Skills match: Python, RAG"
-    ]
-  },
-  {
-    "url": "https://mock-job.com/2",
-    "title": "Backend Engineering Intern",
-    "company": "CloudSystems",
+    "url": "https://mock-job-results.com/2?q=in+the+big+fours",
+    "title": "Lead Fours Developer",
+    "company": "DataFlow",
     "location": "Lyon",
-    "score": 41,
+    "salary": "Competitive",
+    "postedDate": "Today",
+    "score": 37,
     "reasons": [
-      "Semantic Global = 0.691",
+      "Semantic Global = 0.614",
       "Semantic Skills = 0.000",
-      "Composite = 0.415 (w_global=0.6, w_skills=0.4)",
-      "Contract type: internship",
-      "Seniority: intern"
+      "Composite = 0.368 (w_global=0.6, w_skills=0.4)"
     ],
     "missing_skills": [
-      "Docker"
+      "Kubernetes"
     ],
     "strong_points": [
-      "Skills match: Python, RAG",
-      "Keywords overlap: for, python, rag, skills"
+      "Skills match: Python, SQL, Docker",
+      "Keywords overlap: with, docker, and"
     ]
   },
   {
-    "url": "https://mock-job.com/3",
-    "title": "Full Stack Intern (React/Django)",
-    "company": "WebAgency",
+    "url": "https://mock-job-results.com/0?q=in+the+big+fours",
+    "title": "Senior Fours Specialist",
+    "company": "GlobalTech",
     "location": "Paris",
-    "score": 40,
+    "salary": "Competitive",
+    "postedDate": "Today",
+    "score": 37,
     "reasons": [
-      "Semantic Global = 0.669",
+      "Semantic Global = 0.614",
       "Semantic Skills = 0.000",
-      "Composite = 0.401 (w_global=0.6, w_skills=0.4)",
+      "Composite = 0.368 (w_global=0.6, w_skills=0.4)"
+    ],
+    "missing_skills": [
+      "Kubernetes"
+    ],
+    "strong_points": [
+      "Skills match: Python, SQL, Docker"
+    ]
+  },
+  {
+    "url": "https://mock-job-results.com/1?q=in+the+big+fours",
+    "title": "Fours Associate",
+    "company": "Innovate AI",
+    "location": "Remote",
+    "salary": "Competitive",
+    "postedDate": "Today",
+    "score": 36,
+    "reasons": [
+      "Semantic Global = 0.597",
+      "Semantic Skills = 0.000",
+      "Composite = 0.358 (w_global=0.6, w_skills=0.4)"
+    ],
+    "missing_skills": [
+      "Kubernetes"
+    ],
+    "strong_points": [
+      "Skills match: Python, SQL, Docker"
+    ]
+  },
+  {
+    "url": "https://mock-job-results.com/3?q=in+the+big+fours",
+    "title": "Fours Internship",
+    "company": "Startup Hub",
+    "location": "Paris",
+    "salary": "Competitive",
+    "postedDate": "Today",
+    "score": 36,
+    "reasons": [
+      "Semantic Global = 0.594",
+      "Semantic Skills = 0.000",
+      "Composite = 0.357 (w_global=0.6, w_skills=0.4)",
       "Contract type: internship",
       "Seniority: intern"
     ],
     "missing_skills": [
-      "Docker"
+      "Kubernetes"
     ],
     "strong_points": [
-      "Skills match: Python, RAG",
-      "Keywords overlap: for, python, rag, skills"
+      "Skills match: Python, SQL, Docker",
+      "Keywords overlap: with, docker, and, python"
     ]
   }
 ]
