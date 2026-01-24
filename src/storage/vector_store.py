@@ -34,8 +34,19 @@ def get_vector_store():
         # Return none if no index yet
         return None
 
-def create_vector_store(texts, metadatas=None):
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+def create_vector_store(texts: list[str], metadatas: list[dict] = None):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=settings.GEMINI_API_KEY)
-    vector_store = FAISS.from_texts(texts, embeddings, metadatas=metadatas)
+    
+    # RAG best practice: Chunking
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=100,
+    )
+    
+    douments = text_splitter.create_documents(texts, metadatas=metadatas)
+    
+    vector_store = FAISS.from_documents(douments, embeddings)
     vector_store.save_local(f"{settings.DATA_DIR}/faiss_index")
     return vector_store

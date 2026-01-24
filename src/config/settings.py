@@ -21,6 +21,8 @@ class Settings:
     # Gemini (Analyzer/Writer/Matcher explanations)
     GEMINI_API_KEY: str
     GEMINI_MODEL: str = "gemini-2.0-flash"
+    GEMINI_MODEL_FAST: str = "gemini-2.0-flash"
+    GEMINI_MODEL_SMART: str = "gemini-2.0-flash"
 
     # Paths
     PROJECT_ROOT: str = ""
@@ -43,6 +45,8 @@ def load_settings() -> Settings:
         GOOGLE_CSE_ID=_get_env("GOOGLE_CSE_ID", required=True),
         GEMINI_API_KEY=_get_env("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""), required=True),
         GEMINI_MODEL=_get_env("GEMINI_MODEL", "gemini-2.0-flash"),
+        GEMINI_MODEL_FAST=_get_env("GEMINI_MODEL_FAST", "gemini-2.0-flash"),
+        GEMINI_MODEL_SMART=_get_env("GEMINI_MODEL_SMART", "gemini-2.0-flash"),
         PROJECT_ROOT=project_root,
         DATA_DIR=_get_env("DATA_DIR", "data"),
         GENERATED_DIR=_get_env("GENERATED_DIR", "data/generated"),

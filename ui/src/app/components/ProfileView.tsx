@@ -44,13 +44,19 @@ export function ProfileView() {
     }
   };
 
-  const handleProfileUpdate = (field: string, value: string) => {
+  const handleProfileUpdate = (field: string, value: any) => {
     setActiveProfile({ ...activeProfile, [field]: value });
   };
 
+  useEffect(() => {
+    console.log("Active Profile Data:", activeProfile);
+  }, [activeProfile]);
+
   if (!activeProfile) return <div className="p-8 text-center">Loading profile...</div>;
 
-  const hasProfile = activeProfile.name && activeProfile.name.length > 0;
+  const hasProfile = (activeProfile.name && activeProfile.name.length > 0) ||
+    (activeProfile.email && activeProfile.email.length > 0) ||
+    (activeProfile.skills && activeProfile.skills.length > 0);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
@@ -277,22 +283,59 @@ export function ProfileView() {
 
                 <div className="h-px bg-zinc-800" />
 
+                {/* Summary Section */}
+                <div className="space-y-3">
+                  <label className="text-xs font-medium text-zinc-500 uppercase">Summary</label>
+                  <textarea
+                    value={activeProfile.summary || ''}
+                    onChange={(e) => handleProfileUpdate('summary', e.target.value)}
+                    className="w-full h-24 bg-black/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 outline-none resize-none"
+                    placeholder="Brief professional summary..."
+                  />
+                </div>
+
+                <div className="h-px bg-zinc-800" />
+
                 {/* Skills Section */}
                 <div className="space-y-3">
-                  <div className="flex justify-between">
+                  <div className="flex justify-between items-center">
                     <label className="text-xs font-medium text-zinc-500 uppercase">Skills</label>
-                    <span className="text-xs text-blue-400 cursor-pointer hover:underline">+ Add Skill</span>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Add skill..."
+                        className="bg-zinc-800 border border-zinc-700 rounded px-2 py-0.5 text-xs text-white outline-none"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            const val = e.currentTarget.value.trim();
+                            if (val) {
+                              const current = activeProfile.skills || [];
+                              handleProfileUpdate('skills', [...current, val]);
+                              e.currentTarget.value = '';
+                            }
+                          }
+                        }}
+                      />
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {activeProfile.skills && activeProfile.skills.length > 0 ? (
                       activeProfile.skills.map((skill: string, i: number) => (
                         <span key={i} className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 flex items-center gap-1 group cursor-pointer hover:bg-zinc-700">
                           {skill}
-                          <span className="hidden group-hover:inline text-red-400">×</span>
+                          <span
+                            onClick={() => {
+                              const newList = activeProfile.skills.filter((_: any, idx: number) => idx !== i);
+                              handleProfileUpdate('skills', newList);
+                            }}
+                            className="text-zinc-500 hover:text-red-400 font-bold px-1"
+                          >
+                            ×
+                          </span>
                         </span>
                       ))
                     ) : (
-                      <span className="text-sm text-zinc-500 italic">No skills extracted yet.</span>
+                      <span className="text-sm text-zinc-500 italic">No skills listed.</span>
                     )}
                   </div>
                 </div>
@@ -301,24 +344,77 @@ export function ProfileView() {
 
                 {/* Experience Section */}
                 <div className="space-y-3">
-                  <div className="flex justify-between">
+                  <div className="flex justify-between items-center">
                     <label className="text-xs font-medium text-zinc-500 uppercase">Experience</label>
-                    <span className="text-xs text-blue-400 cursor-pointer hover:underline">+ Add</span>
+                    <button
+                      onClick={() => {
+                        const emptyExp = { role: "New Role", company: "Company", duration: "Dates", description: "Responsibilities..." };
+                        handleProfileUpdate('experience', [emptyExp, ...(activeProfile.experience || [])]);
+                      }}
+                      className="text-xs text-blue-400 hover:underline"
+                    >
+                      + Add Experience
+                    </button>
                   </div>
 
                   {activeProfile.experience && activeProfile.experience.length > 0 ? (
                     activeProfile.experience.map((exp: any, i: number) => (
-                      <div key={i} className="p-3 bg-black/30 border border-zinc-800 rounded-lg mb-2">
-                        <h4 className="text-sm font-medium text-white">{exp.role} at {exp.company}</h4>
-                        <p className="text-xs text-zinc-500 mb-2">{exp.duration}</p>
-                        <p className="text-xs text-zinc-400 leading-relaxed line-clamp-3">
-                          {exp.description}
-                        </p>
+                      <div key={i} className="p-3 bg-black/30 border border-zinc-800 rounded-lg space-y-2 group relative">
+                        <button
+                          onClick={() => {
+                            const newList = activeProfile.experience.filter((_: any, idx: number) => idx !== i);
+                            handleProfileUpdate('experience', newList);
+                          }}
+                          className="absolute top-2 right-2 text-zinc-600 hover:text-red-500 hidden group-hover:block"
+                        >
+                          Delete
+                        </button>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={exp.role}
+                            onChange={(e) => {
+                              const newList = [...activeProfile.experience];
+                              newList[i].role = e.target.value;
+                              handleProfileUpdate('experience', newList);
+                            }}
+                            className="flex-1 bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-blue-500 outline-none text-sm font-medium text-white"
+                          />
+                          <input
+                            type="text"
+                            value={exp.duration || (exp.start_date ? `${exp.start_date} - ${exp.end_date || 'Present'}` : '')}
+                            onChange={(e) => {
+                              const newList = [...activeProfile.experience];
+                              newList[i].duration = e.target.value;
+                              handleProfileUpdate('experience', newList);
+                            }}
+                            className="w-24 bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-blue-500 outline-none text-sm font-medium text-white"
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={exp.company}
+                          onChange={(e) => {
+                            const newList = [...activeProfile.experience];
+                            newList[i].company = e.target.value;
+                            handleProfileUpdate('experience', newList);
+                          }}
+                          className="w-full bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-blue-500 outline-none text-xs text-zinc-400"
+                        />
+                        <textarea
+                          value={exp.description}
+                          onChange={(e) => {
+                            const newList = [...activeProfile.experience];
+                            newList[i].description = e.target.value;
+                            handleProfileUpdate('experience', newList);
+                          }}
+                          className="w-full bg-transparent border border-transparent hover:border-zinc-800 focus:border-zinc-800 focus:bg-zinc-900/50 outline-none text-xs text-zinc-400 p-1 rounded min-h-[60px] resize-none"
+                        />
                       </div>
                     ))
                   ) : (
                     <div className="p-3 bg-black/30 border border-zinc-800 rounded-lg">
-                      <p className="text-sm text-zinc-500">No experience listed.</p>
+                      <p className="text-sm text-zinc-500 italic">No experience added yet.</p>
                     </div>
                   )}
                 </div>

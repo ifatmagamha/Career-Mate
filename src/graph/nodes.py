@@ -121,4 +121,4 @@ def node_report_matches(state: RecruitAIState) -> RecruitAIState:
     
     summary += "\nYou can view all details in the Job Explorer tab."
     
-    return {"messages": [AIMessage(content=summary)]}
+    return {"messages": [AIMessage(content=summary)], "active_node": "job_pipeline"}

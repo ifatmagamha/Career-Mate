@@ -17,9 +17,10 @@ interface Job {
 interface JobDetailProps {
   job: Job | null;
   onBack: () => void;
+  onGenerateCoverLetter: (description: string) => void;
 }
 
-export function JobDetail({ job, onBack }: JobDetailProps) {
+export function JobDetail({ job, onBack, onGenerateCoverLetter }: JobDetailProps) {
   const handleAction = async (stage: 'applied' | 'saved') => {
     if (!job) return;
 
@@ -215,7 +216,10 @@ export function JobDetail({ job, onBack }: JobDetailProps) {
               >
                 Apply Now
               </button>
-              <button className="w-full py-3 bg-zinc-800 text-white rounded-lg font-medium hover:bg-zinc-700 transition-colors">
+              <button
+                onClick={() => onGenerateCoverLetter(job.description)}
+                className="w-full py-3 bg-zinc-800 text-white rounded-lg font-medium hover:bg-zinc-700 transition-colors"
+              >
                 Generate Cover Letter
               </button>
               <button
@@ -224,7 +228,13 @@ export function JobDetail({ job, onBack }: JobDetailProps) {
               >
                 Save to Tracker
               </button>
-              <button className="w-full py-3 bg-zinc-800 text-white rounded-lg font-medium hover:bg-zinc-700 transition-colors">
+              <button
+                onClick={() => {
+                  // Redirect with a pre-filled query for deep analysis
+                  window.dispatchEvent(new CustomEvent('deep-analyze-job', { detail: { job } }));
+                }}
+                className="w-full py-3 bg-zinc-800 text-white rounded-lg font-medium hover:bg-zinc-700 transition-colors"
+              >
                 Analyze with AI
               </button>
             </div>

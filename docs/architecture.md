@@ -73,10 +73,25 @@ graph TD
 ```
 
 ## Storage & Retrieval
-- **Vector Store**: FAISS (Facebook AI Similarity Search). Stores chunks of the Candidate Resume (Skills, Experience blocks).
-- **Relational Data**: Stored as JSON files in `data/` for portability (MVP).
 
-## Design Principles
-- **Robustness**: Agents use strict JSON schemas (Pydantic) to prevent hallucinated structures.
-- **Resilience**: The Router uses regex fallbacks if JSON parsing fails.
-- **Observability**: `evaluate.py` acts as an integration test suite using LLM-as-a-judge.
+- **Vector Store (`data/faiss_index/`)**: 
+  - **Purpose**: Persistant storage for the Candidate Profile embeddings.
+  - **Technology**: FAISS (Facebook AI Similarity Search) used in-memory for speed.
+  - **Indexing**: Documents are chunked using `RecursiveCharacterTextSplitter` (1000 chars, 100 overlap) before being converted to embeddings via `models/embedding-001`.
+  - **Usage**: The RAG Agent queries this index to find relevant CV sections for specific user questions.
+- **Relational Data**: 
+  - Stored as JSON files in `data/` for portability.
+  - `job_offers_analyzed.json`: The "database" for the **Stats Agent**.
+  - `matches.json`: Latest search results shown in the UI.
+
+## Advanced LLM Techniques
+
+- **Scaffolding**: Each agent uses a specific prompt template (see `src/prompts/`) to "scaffold" the LLM's behavior, ensuring consistent output.
+- **Structured Outputs**: Extensive use of **Pydantic** models to validate agent messages and ensure the UI receives predictable data.
+- **Stateful Orchestration**: LangGraph manages the "conversation memory" and "data flow" between specialized agents, preventing context loss.
+
+## Future Perspectives (LLMOps)
+
+- **Langfuse Integration**: To be implemented for full trace visibility, cost tracking, and prompt versioning.
+- **Streaming Responses**: Improving UI responsiveness by streaming LLM output in the `/api/chat` endpoint.
+- **Human-in-the-loop**: Adding a validation step where the user confirms the "Job Analysis" before generating documents.

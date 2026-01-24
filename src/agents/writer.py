@@ -9,13 +9,16 @@ from src.schemas.job_offer import OfferAnalyzed
 from src.utils.prompts import load_prompt
 
 
-def _clip(text: str, n: int = 8000) -> str:
+def _clip(text: str, n: int = 12000) -> str:
     return (text or "").strip()[:n]
 
 
 def _safe_list(x) -> List[str]:
     if isinstance(x, list):
         return [str(i).strip() for i in x if str(i).strip()]
+    if isinstance(x, str):
+        # If the LLM returned a single string instead of a list, split by lines
+        return [s.strip() for s in x.split('\n') if s.strip()]
     return []
 
 
@@ -61,18 +64,16 @@ def generate_structured_cv(candidate: CandidateProfile, offer: OfferAnalyzed) ->
     cv_raw = _clip(candidate.cv_text, 9000)
 
     prompt_template = load_prompt("writer_cv")
-    # FIX: Unpack offer fields explicitly for the prompt
-    prompt = prompt_template.format(
-        title=offer.title,
-        company=offer.company or "Unknown Company",
-        location=offer.location or "Remote/Unknown",
-        skills=", ".join(_safe_list(offer.skills)),
-        missions=", ".join(_safe_list(offer.missions)),
-        cv_raw=cv_raw
-    )
+    # SAFE INJECTION: Avoid .format() because CV text has braces
+    prompt = prompt_template.replace("{title}", offer.title) \
+                           .replace("{company}", offer.company or "Unknown") \
+                           .replace("{location}", offer.location or "Unknown") \
+                           .replace("{skills}", ", ".join(_safe_list(offer.skills))) \
+                           .replace("{missions}", ", ".join(_safe_list(offer.missions))) \
+                           .replace("{cv_raw}", cv_raw)
 
     try:
-        text = llm.generate_text(prompt, temperature=0.2, max_output_tokens=1500) or ""
+        text = llm.generate_text(prompt, temperature=0.2, max_output_tokens=2000) or ""
         data = extract_json_dict(text)
 
         # minimal safety defaults
@@ -93,17 +94,16 @@ def generate_structured_letter(candidate: CandidateProfile, offer: OfferAnalyzed
     cv_raw = _clip(candidate.cv_text, 7000)
 
     prompt_template = load_prompt("writer_letter")
-    prompt = prompt_template.format(
-        title=offer.title,
-        company=offer.company or "Unknown",
-        location=offer.location or "Unknown",
-        skills=", ".join(_safe_list(offer.skills)),
-        missions=", ".join(_safe_list(offer.missions)),
-        cv_raw=cv_raw
-    )
+    # SAFE INJECTION
+    prompt = prompt_template.replace("{title}", offer.title) \
+                           .replace("{company}", offer.company or "Unknown") \
+                           .replace("{location}", offer.location or "Unknown") \
+                           .replace("{skills}", ", ".join(_safe_list(offer.skills))) \
+                           .replace("{missions}", ", ".join(_safe_list(offer.missions))) \
+                           .replace("{cv_raw}", cv_raw)
 
     try:
-        text = llm.generate_text(prompt, temperature=0.3, max_output_tokens=1000) or ""
+        text = llm.generate_text(prompt, temperature=0.3, max_output_tokens=1500) or ""
         data = extract_json_dict(text)
         if not isinstance(data.get("body"), list):
             data["body"] = []
@@ -187,19 +187,50 @@ def generate_cv_and_letter_pdfs(
     return cv_pdf, letter_pdf
 
 
-def generate_documents(candidate: CandidateProfile, offer: OfferAnalyzed) -> Tuple[str, str]:
+def generate_cold_email(candidate: CandidateProfile, offer: OfferAnalyzed, tone: str = "professional") -> str:
+    cv_raw = _clip(candidate.cv_text, 7000)
+    prompt_template = load_prompt("writer_email.md")
+    # SAFE INJECTION
+    prompt = prompt_template.replace("{title}", offer.title) \
+                           .replace("{company}", offer.company or "Unknown") \
+                           .replace("{missions}", ", ".join(_safe_list(offer.missions))) \
+                           .replace("{requirements}", ", ".join(_safe_list(offer.requirements))) \
+                           .replace("{tone}", tone) \
+                           .replace("{cv_raw}", cv_raw)
+    try:
+        text = llm.generate_text(prompt, temperature=0.4, max_output_tokens=800) or ""
+        return text
+    except Exception as e:
+        logger.error(f"Error generating Email: {e}")
+        return f"Generated cold email for {offer.title} at {offer.company}."
+
+def generate_interview_prep(candidate: CandidateProfile, offer: OfferAnalyzed, difficulty: str = "medium") -> str:
+    cv_raw = _clip(candidate.cv_text, 7000)
+    prompt_template = load_prompt("writer_interview.md")
+    # SAFE INJECTION
+    prompt = prompt_template.replace("{title}", offer.title) \
+                           .replace("{company}", offer.company or "Unknown") \
+                           .replace("{missions}", ", ".join(_safe_list(offer.missions))) \
+                           .replace("{requirements}", ", ".join(_safe_list(offer.requirements))) \
+                           .replace("{difficulty}", difficulty) \
+                           .replace("{cv_raw}", cv_raw)
+    try:
+        text = llm.generate_text(prompt, temperature=0.5, max_output_tokens=2000) or ""
+        return text
+    except Exception as e:
+        logger.error(f"Error generating Interview Prep: {e}")
+        return f"Generated interview questions for {offer.title} at {offer.company}."
+
+def generate_documents(candidate: CandidateProfile, offer: OfferAnalyzed, doc_type: str = "cover-letter", extra: str = "professional") -> str:
     """
-    Simpler wrapper that returns text content (Markdown-like) for UI use.
-    Does not write PDFs locally (that is done by generate_cv_and_letter_pdfs).
+    Unified entry point for UI generation.
     """
-    cv_data = generate_structured_cv(candidate, offer)
-    letter_data = generate_structured_letter(candidate, offer)
-    
-    # Convert JSON data to simple text representation for UI display/edit
-    cv_text = f"TITLE: {cv_data.get('title')}\n\nSUMMARY:\n" + "\n".join(_safe_list(cv_data.get('summary')))
-    cv_text += "\n\nSKILLS:\n" + ", ".join(_safe_list(cv_data.get('skills')))
-    cv_text += "\n\nEXPERIENCE:\n" + "\n".join(_safe_list(cv_data.get('experience')))
-    
-    letter_text = f"SUBJECT: {letter_data.get('subject')}\n\n" + "\n".join(_safe_list(letter_data.get('body')))
-    
-    return cv_text, letter_text
+    if doc_type == "cover-letter":
+        cv_data = generate_structured_cv(candidate, offer)
+        letter_data = generate_structured_letter(candidate, offer)
+        return f"SUBJECT: {letter_data.get('subject')}\n\n" + "\n".join(_safe_list(letter_data.get('body')))
+    elif doc_type == "cold-email":
+        return generate_cold_email(candidate, offer, tone=extra)
+    elif doc_type == "interview":
+        return generate_interview_prep(candidate, offer, difficulty=extra)
+    return "Unknown document type."

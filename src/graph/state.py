@@ -32,6 +32,7 @@ class RecruitAIState(TypedDict, total=False):
 
     # Debug / errors
     errors: List[str]
+    retrieved_chunks: List[str]  # Chunks retrieved by RAG
     meta: Dict[str, Any]  # place pour infos annexes (timings, tokens, etc.)
 
 
