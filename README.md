@@ -21,6 +21,9 @@ The system is built on an **Agentic Orchestration** model using **LangGraph**. U
 4.  **Action Hub**: The system can trigger "Writing" nodes to generate tailored CVs, Cover Letters, or cold emails grounded in the retrieved candidate profile.
 
 ---
+![RecruitAI Architecture](docs/architecture.png)
+
+---
 
 ## RAG Mechanism (Retrieval-Augmented Generation)
 
