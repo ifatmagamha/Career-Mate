@@ -4,7 +4,8 @@
 
 ---
 
-## System Architecture & Workflow
+## System Workflow
+
 
 The system is built on an **Agentic Orchestration** model using **LangGraph**. Unlike traditional linear pipelines, RecruitAI maintains a cyclic state where specialized agents communicate to refine candidate profiles and job matches.
 
