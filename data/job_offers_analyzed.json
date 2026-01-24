@@ -1,7 +1,7 @@
 [
   {
-    "url": "https://mock-job-results.com/0?q=in+the+big+fours",
-    "title": "Senior Fours Specialist",
+    "url": "https://mock-job-results.com/0?q=Find+me+jobs+for:+data+engineering+internships",
+    "title": "Senior Find Specialist",
     "company": "GlobalTech",
     "location": "Paris",
     "contract_type": "unknown",
@@ -20,8 +20,8 @@
     "summary": null
   },
   {
-    "url": "https://mock-job-results.com/1?q=in+the+big+fours",
-    "title": "Fours Associate",
+    "url": "https://mock-job-results.com/1?q=Find+me+jobs+for:+data+engineering+internships",
+    "title": "Find Associate",
     "company": "Innovate AI",
     "location": "Remote",
     "contract_type": "unknown",
@@ -40,8 +40,8 @@
     "summary": null
   },
   {
-    "url": "https://mock-job-results.com/2?q=in+the+big+fours",
-    "title": "Lead Fours Developer",
+    "url": "https://mock-job-results.com/2?q=Find+me+jobs+for:+data+engineering+internships",
+    "title": "Lead Find Developer",
     "company": "DataFlow",
     "location": "Lyon",
     "contract_type": "unknown",
@@ -58,7 +58,7 @@
     "requirements": [],
     "keywords": [
       "lead",
-      "fours",
+      "find",
       "developer",
       "are",
       "looking",
@@ -81,8 +81,8 @@
     "summary": null
   },
   {
-    "url": "https://mock-job-results.com/3?q=in+the+big+fours",
-    "title": "Fours Internship",
+    "url": "https://mock-job-results.com/3?q=Find+me+jobs+for:+data+engineering+internships",
+    "title": "Find Internship",
     "company": "Startup Hub",
     "location": "Paris",
     "contract_type": "internship",
@@ -98,7 +98,7 @@
     "missions": [],
     "requirements": [],
     "keywords": [
-      "fours",
+      "find",
       "internship",
       "are",
       "looking",
@@ -123,8 +123,8 @@
     "summary": null
   },
   {
-    "url": "https://mock-job-results.com/4?q=in+the+big+fours",
-    "title": "Consultant Fours",
+    "url": "https://mock-job-results.com/4?q=Find+me+jobs+for:+data+engineering+internships",
+    "title": "Consultant Find",
     "company": "Advisory Corp",
     "location": "London",
     "contract_type": "unknown",
@@ -141,7 +141,7 @@
     "requirements": [],
     "keywords": [
       "consultant",
-      "fours",
+      "find",
       "are",
       "looking",
       "for",

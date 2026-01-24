@@ -1,4 +1,4 @@
-# 🏗️ Full Architecture Documentation
+# Full Architecture Documentation
 
 ## 1. System Overview
 **Career Mate** is a decoupled, agentic web application designed to optimize the job search lifecycle. It consists of a **FastAPI Backend** orchestrating a graph of AI agents and a **React Frontend** providing an interactive "Career Cockpit".
