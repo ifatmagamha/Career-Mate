@@ -44,7 +44,7 @@ class SemanticMatcher:
 
     def __init__(self):
         self.embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
+            model="models/gemini-embedding-001",
             google_api_key=settings.GEMINI_API_KEY
         )
 

@@ -19,7 +19,7 @@ def query_store(query: str, k: int = 3):
 
 def get_vector_store():
     # Setup embeddings
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=settings.GEMINI_API_KEY)
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=settings.GEMINI_API_KEY)
     
     # Use FAISS (In-Memory)
     try:
@@ -37,7 +37,7 @@ def get_vector_store():
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 def create_vector_store(texts: list[str], metadatas: list[dict] = None):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=settings.GEMINI_API_KEY)
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=settings.GEMINI_API_KEY)
     
     # RAG best practice: Chunking
     text_splitter = RecursiveCharacterTextSplitter(

@@ -71,7 +71,8 @@ def stats_node(state: RecruitAIState) -> dict:
             If the query is about specific trends, offer insights into which skills are currently in demand.
             """
             res = llm.invoke(prompt)
-            output_text = res.content
+            output_text = res.text
+        else:
             # Create the data-explorer agent for specific local queries
             # System hint to ensure it knows how to handle the dataframe
             prefix = "You are a specialized data analyst exploring a job dataset stored in a variable named 'df'. " \

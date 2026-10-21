@@ -42,7 +42,7 @@ def route_request(state: RecruitAIState) -> Literal["job_pipeline", "rag_agent",
         
         # Direct generation
         response = llm.invoke(final_prompt)
-        content = response.content.strip().lower()
+        content = response.text.strip().lower()
         
         # Refined Decision Logic
         if any(w in content for w in ["search", "find", "look for", "offers", "jobs", "pipeline"]):

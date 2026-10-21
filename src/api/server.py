@@ -257,7 +257,7 @@ async def chat_stream(req: ChatRequest):
         state = await loop.run_in_executor(None, lambda: graph.invoke(inputs))
         
         messages = state.get("messages", [])
-        last_msg = messages[-1].content if messages else "No response."
+        last_msg = messages[-1].text if messages else "No response."
         
         # Simulate word-by-word streaming for the UI "feel"
         words = last_msg.split(" ")
@@ -292,7 +292,7 @@ async def chat(req: ChatRequest):
         
         inputs = {"messages": [HumanMessage(content=req.message)], "query": req.message, "candidate": candidate}
         state = graph.invoke(inputs)
-        last_msg = state.get("messages", [])[-1].content if state.get("messages") else "No response."
+        last_msg = state.get("messages", [])[-1].text if state.get("messages") else "No response."
         return {"response": last_msg, "agent": "RecruitAI", "offers_count": len(state.get("offers_analyzed") or [])}
     except Exception as e:
         logger.error(f"API Error: {e}")

@@ -58,7 +58,7 @@ def rag_node(state: RecruitAIState) -> dict:
         logger.info(f"[rag_agent] Answer generated.")
         
         duration = (time.time() - start_time) * 1000
-        log_agent_trace("RAG", query, response.content, duration)
+        log_agent_trace("RAG", query, response.text, duration)
         
         return {
             "messages": [response],

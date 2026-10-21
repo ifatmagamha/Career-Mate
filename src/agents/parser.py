@@ -70,7 +70,7 @@ def parse_resume_text(text: str) -> Optional[Dict[str, Any]]:
         response = chain.invoke({"text": text})
         
         # Extract JSON from response
-        content = response.content.strip()
+        content = response.text.strip()
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
