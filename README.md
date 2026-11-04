@@ -101,8 +101,14 @@ RecruitAI uses a tiered prompt strategy to maximize reliability:
 
 ## Getting Started - Launch system
 
-1.  **Environment**: Install [uv](https://docs.astral.sh/uv/), clone the repo and run `uv sync --locked` (creates `.venv` from `uv.lock`, Python 3.14 from `.python-version`).
-2.  **API Keys**: In `.env`, add the key of each provider used in `config/models.toml` (default: `HF_TOKEN` for chat models, `GEMINI_API_KEY` for embeddings). `GOOGLE_API_KEY` and `GOOGLE_CSE_ID` are only needed for the legacy web-search pipeline.
-3.  **The Engine**: Start the backend with `uv run uvicorn src.api.server:app --reload`.
-    Models are chosen in `config/models.toml` only: edit `[defaults]` to switch every role, pin a role to override it, or try one without editing with `LLM_DEFAULT_MODEL=...` / `LLM_<ROLE>_MODEL=...`. Any OpenAI-compatible provider (Hugging Face router, Groq, Gemini, vLLM, Ollama) is a `[providers.<name>]` block. Default: `openai/gpt-oss-120b` on Groq through the Hugging Face router (`HF_TOKEN`, with your Groq key saved as a custom provider key on Hugging Face); embeddings stay on Gemini (`GEMINI_API_KEY`).
-4.  **The Interface**: Navigate to `ui/`, run `npm install` then `npm run dev`.
+Each person runs their own private copy (own database, CV and keys). **Follow [SETUP.md](SETUP.md)**, in short:
+
+```bash
+uv sync --locked && npm --prefix ui install
+uv run python -m src.cli init          # creates .env, the data folder and the database
+uv run python -m src.cli check --live  # after adding your keys to .env
+uv run uvicorn src.api.server:app --reload
+npm --prefix ui run dev                # http://localhost:5173
+```
+
+Models are chosen in `config/models.toml` only (edit `[defaults]` to switch every role); see SETUP.md section 6 to customize your copy.

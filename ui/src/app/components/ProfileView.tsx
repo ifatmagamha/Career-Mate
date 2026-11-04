@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { API } from '@/app/api';
 import { User, Briefcase, MapPin, Mail, FileText, CheckCircle2, RefreshCw, TrendingUp, Clock } from 'lucide-react';
 
 interface Application {
@@ -25,7 +26,7 @@ export function ProfileView() {
   useEffect(() => {
     fetchProfile();
     fetchApplications();
-    fetch('http://localhost:8000/api/statuses')
+    fetch(`${API}/api/statuses`)
       .then((res) => res.json())
       .then(setStatuses)
       .catch((e) => console.error("Failed to fetch statuses", e));
@@ -33,7 +34,7 @@ export function ProfileView() {
 
   const fetchProfile = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/profile/current');
+      const res = await fetch(`${API}/api/profile/current`);
       const data = await res.json();
       setActiveProfile(data);
     } catch (e) {
@@ -43,7 +44,7 @@ export function ProfileView() {
 
   const fetchApplications = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/applications');
+      const res = await fetch(`${API}/api/applications`);
       const data = await res.json();
       setApplications(data);
     } catch (e) {
@@ -123,7 +124,7 @@ export function ProfileView() {
 
                     setLoading(true);
                     try {
-                      const res = await fetch("http://localhost:8000/api/upload_resume", {
+                      const res = await fetch(`${API}/api/upload_resume`, {
                         method: "POST",
                         body: formData
                       });
@@ -159,7 +160,7 @@ export function ProfileView() {
                 onClick={async () => {
                   setLoading(true);
                   try {
-                    const res = await fetch("http://localhost:8000/api/profile/sync", { method: "POST" });
+                    const res = await fetch(`${API}/api/profile/sync`, { method: "POST" });
                     const data = await res.json();
                     if (data.count > 0) {
                       await fetchProfile();
@@ -222,7 +223,7 @@ export function ProfileView() {
                       cv_text: activeProfile.cv_text || ""
                     };
 
-                    const res = await fetch('http://localhost:8000/api/profile/save', {
+                    const res = await fetch(`${API}/api/profile/save`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(payload)
@@ -481,7 +482,7 @@ export function ProfileView() {
                       onChange={async (e) => {
                         const newStage = e.target.value;
                         try {
-                          await fetch(`http://localhost:8000/api/applications/${app.id}`, {
+                          await fetch(`${API}/api/applications/${app.id}`, {
                             method: 'PATCH',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ stage: newStage })

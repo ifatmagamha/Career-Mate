@@ -419,11 +419,15 @@ def update_application(app_id: str, updates: dict):
         offer = db.get_offer_by_application(conn, app_id)
         if not offer:
             raise HTTPException(status_code=404, detail="Application not found")
-        if "stage" in updates:
-            try:
+        try:
+            if "stage" in updates:
                 offer = db.update_status(conn, app_id, updates["stage"])
-            except ValueError as e:
-                raise HTTPException(status_code=422, detail=str(e))
+            if "folder_id" in updates:  # null = unfiled (drag back to "Unfiled")
+                offer = db.set_folder(conn, app_id, updates["folder_id"] or None)
+            if "notes" in updates:
+                offer = db.set_notes(conn, app_id, str(updates["notes"] or "")[:20000])
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
         return _to_application(offer)
 
 # --- Offers (capture) ---
@@ -456,10 +460,32 @@ def capture(req: CaptureRequest):
             return {"offer": db.find_offer_by_url(conn, url), "duplicate": True}
         return {"offer": db.insert_offer(conn, fields, actor="ai"), "duplicate": False}
 
+from fastapi import Query
+
+
 @app.get("/api/offers")
-def get_offers():
+def get_offers(
+    q: Optional[str] = None,
+    status: List[str] = Query(default=[]),
+    folder: Optional[str] = None,  # folder id, or "unfiled"
+    contract_type: List[str] = Query(default=[]),
+    remote_policy: List[str] = Query(default=[]),
+    deadline_before: Optional[str] = None,
+    sort: Optional[str] = None,  # recent | deadline | title | company | updated | relevance
+):
+    """Search (full text, BM25) + filters + sort. Same filter keys as saved views."""
     with closing(db.connect()) as conn:
-        return db.list_offers(conn)
+        return db.query_offers(conn, {
+            "q": q, "status": status, "folder": folder, "contract_type": contract_type,
+            "remote_policy": remote_policy,
+            "deadline_before": deadline_before, "sort": sort,
+        })
+
+
+@app.get("/api/offer-facets")
+def get_offer_facets():
+    with closing(db.connect()) as conn:
+        return db.offer_facets(conn)
 
 @app.get("/api/offers/{offer_id}")
 def get_offer(offer_id: str):
@@ -468,3 +494,270 @@ def get_offer(offer_id: str):
     if not offer:
         raise HTTPException(status_code=404, detail="Offer not found")
     return offer
+
+# --- Manual offers, folders, contacts ---
+
+from typing import get_args
+from urllib.parse import urlparse
+from pydantic import Field, field_validator
+from src.schemas.job_offer import SheetContract, SheetRemote, SheetSeniority
+
+
+def _http_url(v: Optional[str]) -> Optional[str]:
+    """Links are rendered as <a href>: only http(s) (a javascript: URL would run code on click)."""
+    v = (v or "").strip()
+    if not v:
+        return None
+    p = urlparse(v)
+    if p.scheme not in ("http", "https") or not p.netloc:
+        raise ValueError("must be an http(s):// link")
+    return v
+
+
+def _clean_list(items: List[str]) -> List[str]:
+    """Trim, drop empties and case-insensitive duplicates, keep order."""
+    seen, out = set(), []
+    for x in (i.strip() for i in items):
+        if x and x.casefold() not in seen:
+            seen.add(x.casefold())
+            out.append(x)
+    return out
+
+
+def _check_enum(v: Optional[str], field: str) -> str:
+    allowed = get_args({"remote_policy": SheetRemote, "contract_type": SheetContract, "seniority": SheetSeniority}[field])
+    if (v or "unknown") not in allowed:
+        raise ValueError(f"must be one of {', '.join(allowed)}")
+    return v or "unknown"
+
+
+def _check_date(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return None
+    datetime.strptime(v, "%Y-%m-%d")  # ValueError -> 422
+    return v
+
+
+@app.get("/api/offer-options")
+def get_offer_options():
+    """Allowed values for the offer form, from the same lists the capture uses."""
+    return {"statuses": list(db.STATUSES), "contract_types": list(get_args(SheetContract)),
+            "remote_policies": list(get_args(SheetRemote)), "seniorities": list(get_args(SheetSeniority))}
+
+
+class ManualOffer(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    company: Optional[str] = None
+    location: Optional[str] = None
+    url: Optional[str] = None
+    remote_policy: str = "unknown"
+    contract_type: str = "unknown"
+    seniority: str = "unknown"
+    salary: Optional[str] = None
+    deadline: Optional[str] = None
+    summary: Optional[str] = None
+    raw_text: Optional[str] = Field(default=None, max_length=100000)
+    skills: List[str] = []
+    nice_to_have: List[str] = []
+    missions: List[str] = []
+    requirements: List[str] = []
+    status: str = "saved"
+    folder_id: Optional[str] = None
+    notes: Optional[str] = None
+
+    _url = field_validator("url")(lambda cls, v: _http_url(v))
+    _lists = field_validator("skills", "nice_to_have", "missions", "requirements")(lambda cls, v: _clean_list(v))
+
+    _enum = field_validator("remote_policy", "contract_type", "seniority")(lambda cls, v, info: _check_enum(v, info.field_name))
+    _date = field_validator("deadline")(lambda cls, v: _check_date(v))
+
+
+@app.post("/api/offers", status_code=201)
+def create_offer(req: ManualOffer):
+    """Manual offer card: same fields and normalization as a captured offer."""
+    with closing(db.connect()) as conn:
+        if req.url and (existing := db.find_offer_by_url(conn, req.url)):
+            raise HTTPException(status_code=409, detail={"message": "This link is already saved", "offer_id": existing["id"]})
+        data = req.model_dump(exclude={"status", "folder_id", "notes"})
+        try:
+            offer = db.insert_offer(conn, {**data, "source": "manual"}, status=req.status, actor="user")
+            if req.folder_id:
+                offer = db.set_folder(conn, offer["application_id"], req.folder_id)
+            if req.notes:
+                offer = db.set_notes(conn, offer["application_id"], req.notes)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        return offer
+
+
+class OfferPatch(BaseModel):
+    """Edit an offer card: send only the fields you change."""
+    title: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    company: Optional[str] = None
+    location: Optional[str] = None
+    url: Optional[str] = None
+    remote_policy: Optional[str] = None
+    contract_type: Optional[str] = None
+    seniority: Optional[str] = None
+    salary: Optional[str] = None
+    deadline: Optional[str] = None
+    summary: Optional[str] = None
+    raw_text: Optional[str] = Field(default=None, max_length=100000)
+    skills: Optional[List[str]] = None
+    nice_to_have: Optional[List[str]] = None
+    missions: Optional[List[str]] = None
+    requirements: Optional[List[str]] = None
+
+    _url = field_validator("url")(lambda cls, v: _http_url(v))
+    _lists = field_validator("skills", "nice_to_have", "missions", "requirements")(lambda cls, v: _clean_list(v) if v is not None else v)
+    _enum = field_validator("remote_policy", "contract_type", "seniority")(
+        lambda cls, v, info: _check_enum(v, info.field_name) if v is not None else v)
+    _date = field_validator("deadline")(lambda cls, v: _check_date(v))
+
+
+@app.patch("/api/offers/{offer_id}")
+def patch_offer(offer_id: str, req: OfferPatch):
+    changes = req.model_dump(exclude_unset=True)
+    with closing(db.connect()) as conn:
+        if changes.get("url") and (other := db.find_offer_by_url(conn, changes["url"])) and other["id"] != offer_id:
+            raise HTTPException(status_code=409, detail={"message": "Another offer already has this link", "offer_id": other["id"]})
+        offer = db.update_offer(conn, offer_id, changes)
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    return offer
+
+
+class ViewIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    filters: dict = {}
+    layout: str = "grid"
+
+
+def _save_view(req: ViewIn, view_id: Optional[str] = None):
+    import sqlite3
+    allowed = {"q", "status", "folder", "contract_type", "remote_policy", "deadline_before", "sort"}
+    filters = {k: v for k, v in req.filters.items() if k in allowed and v not in (None, "", [])}
+    with closing(db.connect()) as conn:
+        try:
+            return db.save_view(conn, req.name, filters, req.layout, view_id)
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="A view with this name already exists")
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except KeyError:
+            raise HTTPException(status_code=404, detail="View not found")
+
+
+@app.get("/api/views")
+def get_views():
+    with closing(db.connect()) as conn:
+        return db.list_views(conn)
+
+
+@app.post("/api/views", status_code=201)
+def post_view(req: ViewIn):
+    return _save_view(req)
+
+
+@app.put("/api/views/{view_id}")
+def put_view(view_id: str, req: ViewIn):
+    return _save_view(req, view_id)
+
+
+@app.delete("/api/views/{view_id}", status_code=204)
+def remove_view(view_id: str):
+    with closing(db.connect()) as conn:
+        if not db.delete_view(conn, view_id):
+            raise HTTPException(status_code=404, detail="View not found")
+
+
+class FolderIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+@app.get("/api/folders")
+def get_folders():
+    with closing(db.connect()) as conn:
+        return db.list_folders(conn)
+
+
+@app.post("/api/folders", status_code=201)
+def post_folder(req: FolderIn):
+    import sqlite3
+    with closing(db.connect()) as conn:
+        try:
+            return db.create_folder(conn, req.name)
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="A folder with this name already exists")
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.patch("/api/folders/{folder_id}")
+def patch_folder(folder_id: str, req: FolderIn):
+    import sqlite3
+    with closing(db.connect()) as conn:
+        try:
+            if not db.rename_folder(conn, folder_id, req.name):
+                raise HTTPException(status_code=404, detail="Folder not found")
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="A folder with this name already exists")
+        return {"id": folder_id, "name": req.name.strip()}
+
+
+@app.delete("/api/folders/{folder_id}", status_code=204)
+def remove_folder(folder_id: str):
+    with closing(db.connect()) as conn:
+        if not db.delete_folder(conn, folder_id):
+            raise HTTPException(status_code=404, detail="Folder not found")
+
+
+class ContactIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    role: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    notes: Optional[str] = None
+    reached_out: bool = False
+
+    _url = field_validator("linkedin_url")(lambda cls, v: _http_url(v))
+
+
+class ContactPatch(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    role: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    notes: Optional[str] = None
+    reached_out: Optional[bool] = None
+
+    _url = field_validator("linkedin_url")(lambda cls, v: _http_url(v))
+
+
+@app.get("/api/applications/{app_id}/contacts")
+def get_contacts(app_id: str):
+    with closing(db.connect()) as conn:
+        return db.list_contacts(conn, app_id)
+
+
+@app.post("/api/applications/{app_id}/contacts", status_code=201)
+def post_contact(app_id: str, req: ContactIn):
+    with closing(db.connect()) as conn:
+        contact = db.add_contact(conn, app_id, req.model_dump())
+    if not contact:
+        raise HTTPException(status_code=404, detail="Application not found")
+    return contact
+
+
+@app.patch("/api/contacts/{contact_id}")
+def patch_contact(contact_id: str, req: ContactPatch):
+    with closing(db.connect()) as conn:
+        contact = db.update_contact(conn, contact_id, req.model_dump(exclude_unset=True))
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return contact
+
+
+@app.delete("/api/contacts/{contact_id}", status_code=204)
+def remove_contact(contact_id: str):
+    with closing(db.connect()) as conn:
+        if not db.delete_contact(conn, contact_id):
+            raise HTTPException(status_code=404, detail="Contact not found")
