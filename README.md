@@ -20,7 +20,7 @@ npm --prefix ui run dev                # http://localhost:5173
 
 **Job Explorer**
 - **Capture an offer from a link.** 
-- **Paste the text** when a site blocks automated reading (LinkedIn, Welcome to the Jungle), or **add an offer by hand** with the same fields. Every offer card can be edited.
+- **Paste the text** when a site blocks automated reading or **add an offer by hand** with the same fields. Every offer card can be edited.
 - **Organize**: folders in the sidebar (create, rename, delete), drag cards onto a folder, statuses from *Saved* to *Accepted / Rejected / Archived*.
 - **Three layouts**: Grid, Table, and a Board with one column per status (drag a card to change its status).
 - **Search by meaning or keywords**: "apprentissage automatique" finds an English "Machine Learning" offer.
