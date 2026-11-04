@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Any
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import HumanMessage
@@ -488,6 +488,22 @@ def get_offers(
         }, mode=mode)
     response.headers["X-Search-Mode"] = used  # e.g. "keyword (semantic unavailable)" when embeddings fail
     return offers
+
+
+class InterpretRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+@app.post("/api/offers/interpret")
+def interpret_query(req: InterpretRequest):
+    """Natural-language search -> {q, filters, folder_id, deadline_before, sort, applied}. The UI applies it as filters."""
+    from src.agents.query_interpreter import interpret
+    from src.llm.port import LLMError
+    with closing(db.connect()) as conn:
+        try:
+            return interpret(conn, req.text)
+        except LLMError as e:  # quota, missing key, invalid output: the user can still search by keywords
+            raise HTTPException(status_code=503, detail=f"Could not interpret the request: {str(e)[:200]}")
 
 
 @app.get("/api/offer-facets")

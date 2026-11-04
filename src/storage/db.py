@@ -322,6 +322,20 @@ def update_offer(conn: sqlite3.Connection, offer_id: str, changes: Dict[str, Any
     return get_offer(conn, offer_id)
 
 
+def _enum_values(name: str) -> tuple:
+    from typing import get_args
+    from src.schemas import job_offer
+    return tuple(v for v in get_args(getattr(job_offer, name)) if v != "unknown")
+
+
+# Filterable fields with a fixed list of values: one entry = SQL filter, API value list and the
+# natural-language interpreter's schema all at once. Add a field here to make it filterable everywhere.
+ENUM_FILTERS = {
+    "status": ("a.status", STATUSES),
+    "contract_type": ("o.contract_type", _enum_values("SheetContract")),
+    "remote_policy": ("o.remote_policy", _enum_values("SheetRemote")),
+}
+
 SORTS = {
     "recent": "o.created_at DESC",
     "deadline": "o.deadline IS NULL, o.deadline ASC",
@@ -347,8 +361,7 @@ def query_offers(conn: sqlite3.Connection, f: Dict[str, Any] | None = None) -> L
         joins = "JOIN offers_fts ON offers_fts.rowid = o.rowid"
         where.append("offers_fts MATCH ?")
         params.append(fts)
-    for key, column in (("status", "a.status"), ("contract_type", "o.contract_type"),
-                        ("remote_policy", "o.remote_policy")):
+    for key, (column, _) in ENUM_FILTERS.items():
         values = [v for v in (f.get(key) or []) if v]
         if values:
             where.append(f"{column} IN ({', '.join('?' for _ in values)})")

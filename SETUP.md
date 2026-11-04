@@ -79,6 +79,9 @@ Open http://localhost:5173. Start with **Profile → upload your CV**, then **Jo
 | Merge skill spellings ("postgres" → "PostgreSQL") | `SKILL_ALIASES` in `src/storage/db.py` |
 | Change statuses or contract types | `STATUSES` in `src/storage/db.py`, the `Sheet…` lists in `src/schemas/job_offer.py` |
 | Change how offers are read or letters written | `EXTRACT_PROMPT` in `src/agents/capture.py`, prompts in `src/prompts/` |
+| Make a new field filterable (dropdown, saved views, "Ask") | `ENUM_FILTERS` in `src/storage/db.py` |
+| Tune meaning-based search after changing the embedding model | run `uv run python scripts/measure_search.py`, then set `min_similarity` / `similarity_margin` in `[roles.embed]` |
+| Check the "Ask" search after changing its model or prompt | `uv run python scripts/measure_query.py` (role `query`, prompt in `src/agents/query_interpreter.py`) |
 
 Run `uv run python -m src.cli check --live` after changing models.
 

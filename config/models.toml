@@ -63,6 +63,9 @@ params = { temperature = 0, max_tokens = 1024 }
 [roles.chat]      # general chat, RAG answers, stats agent
 params = { temperature = 0.3, max_tokens = 4096 }
 
+[roles.query]     # turns a natural-language search into filters + search words
+params = { temperature = 0, max_tokens = 1024 }
+
 [roles.judge]     # evaluate.py
 params = { temperature = 0, max_tokens = 2048 }
 

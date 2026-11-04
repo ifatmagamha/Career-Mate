@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { API } from '@/app/api';
 import {
   Link2, MapPin, Briefcase, Calendar, Sparkles, Loader, ClipboardPaste, Plus, FolderPlus,
-  Folder as FolderIcon, Inbox, Layers, Trash2, StickyNote, Users, Pencil, Search, LayoutGrid,
+  Folder as FolderIcon, Inbox, Layers, Trash2, StickyNote, Users, Pencil, Search, LayoutGrid, X,
   Table as TableIcon, Columns3, Bookmark, Check,
 } from 'lucide-react';
 import { AddOfferDialog, Folder } from '@/app/components/AddOfferDialog';
@@ -46,6 +46,7 @@ interface Filters {
   status: string;
   contract_type: string;
   remote_policy: string;
+  deadline_before: string;
   sort: string;
 }
 
@@ -67,7 +68,7 @@ type Layout = 'grid' | 'table' | 'board';
 // 'all' | 'unfiled' | folder id
 type Scope = string;
 
-const EMPTY_FILTERS: Filters = { q: '', status: '', contract_type: '', remote_policy: '', sort: '' };
+const EMPTY_FILTERS: Filters = { q: '', status: '', contract_type: '', remote_policy: '', deadline_before: '', sort: '' };
 
 const CONTRACT_LABELS: Record<string, string> = {
   permanent: 'Permanent (CDI)',
@@ -116,6 +117,7 @@ const toApiFilters = (f: Filters, scope: Scope) => {
   const out: any = {};
   if (f.q.trim()) out.q = f.q.trim();
   for (const k of ['status', 'contract_type', 'remote_policy'] as const) if (f[k]) out[k] = [f[k]];
+  if (f.deadline_before) out.deadline_before = f.deadline_before;
   if (f.sort) out.sort = f.sort;
   if (scope !== 'all') out.folder = scope;
   return out;
@@ -127,6 +129,7 @@ const fromApiFilters = (v: any): [Filters, Scope] => [
     status: v.status?.[0] || '',
     contract_type: v.contract_type?.[0] || '',
     remote_policy: v.remote_policy?.[0] || '',
+    deadline_before: v.deadline_before || '',
     sort: v.sort || '',
   },
   v.folder || 'all',
@@ -156,6 +159,44 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
   const [savingView, setSavingView] = useState<string | null>(null); // name being typed
   const [showAdd, setShowAdd] = useState(false);
   const [searchMode, setSearchMode] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [understood, setUnderstood] = useState<{ text: string; applied: string[] } | null>(null);
+
+  // Natural-language search: the backend turns the sentence into filters + search words,
+  // which are applied as ordinary filters (visible in the dropdowns, editable, savable as a view).
+  const ask = async () => {
+    const text = filters.q.trim();
+    if (!text) return;
+    setAsking(true);
+    setError('');
+    try {
+      const res = await fetch(`${API}/api/offers/interpret`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const plan = await res.json();
+      if (!res.ok) {
+        setError(typeof plan.detail === 'string' ? plan.detail : 'Could not interpret the request.');
+        return;
+      }
+      setFilters({
+        q: plan.q || '',
+        status: plan.filters.status?.[0] || '',
+        contract_type: plan.filters.contract_type?.[0] || '',
+        remote_policy: plan.filters.remote_policy?.[0] || '',
+        deadline_before: plan.deadline_before || '',
+        sort: plan.sort || '',
+      });
+      setScope(plan.folder_id || 'all');
+      setActiveView(null);
+      setUnderstood({ text, applied: plan.q ? [...plan.applied, `search: “${plan.q}”`] : plan.applied });
+    } catch {
+      setError('Error connecting to server.');
+    } finally {
+      setAsking(false);
+    }
+  };
   const requestId = useRef(0);
 
   const fetchOffers = async () => {
@@ -586,10 +627,20 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
                 value={filters.q}
                 onChange={(e) => setFilter({ q: e.target.value })}
                 placeholder="Search by meaning or keywords, e.g. remote data roles, apprentissage automatique…"
+                onKeyDown={(e) => e.key === 'Enter' && ask()}
                 aria-label="Search offers"
                 className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-blue-500/50"
               />
             </div>
+            <button
+              onClick={ask}
+              disabled={asking || !filters.q.trim()}
+              title="Turn your sentence into filters (Enter)"
+              className="px-3 py-2 rounded-lg text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-200 flex items-center gap-1.5 disabled:opacity-40"
+            >
+              {asking ? <Loader className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              Ask
+            </button>
             {filterSelect('status', 'Any status', options?.statuses)}
             {filterSelect('contract_type', 'Any contract', options?.contract_types)}
             {filterSelect('remote_policy', 'Any remote', options?.remote_policies)}
@@ -603,8 +654,17 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
           </div>
 
           <div className="mb-5 flex flex-wrap items-center gap-2">
+            {filters.deadline_before && (
+              <button
+                onClick={() => setFilter({ deadline_before: '' })}
+                className="px-2.5 py-1 rounded-full bg-blue-600/15 border border-blue-500/30 text-xs text-blue-300 flex items-center gap-1"
+                aria-label="Remove deadline filter"
+              >
+                Deadline ≤ {filters.deadline_before}<X className="w-3 h-3" />
+              </button>
+            )}
             {filtersActive && (
-              <button onClick={() => setFilters(EMPTY_FILTERS)} className="text-xs text-zinc-500 hover:text-white">Clear filters</button>
+              <button onClick={() => { setFilters(EMPTY_FILTERS); setUnderstood(null); }} className="text-xs text-zinc-500 hover:text-white">Clear filters</button>
             )}
 
             <span className="ml-auto flex items-center gap-2">
@@ -654,6 +714,19 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
             </span>
           </div>
 
+          {understood && (
+            <p className="mb-3 flex flex-wrap items-center gap-1.5 text-xs text-zinc-500" aria-live="polite">
+              <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+              Understood “{understood.text}” as
+              {understood.applied.length === 0 && <span className="text-zinc-400">no filter</span>}
+              {understood.applied.map((a) => (
+                <span key={a} className="px-2 py-0.5 rounded-full border border-zinc-700 text-zinc-300">{a}</span>
+              ))}
+              <button onClick={() => setUnderstood(null)} aria-label="Hide interpretation" className="p-0.5 text-zinc-600 hover:text-white">
+                <X className="w-3 h-3" />
+              </button>
+            </p>
+          )}
           <h2 className="mb-4 text-sm font-medium text-zinc-400">
             {scopeName} <span className="text-zinc-600 tabular-nums">· {jobs.length}</span>
             {filters.q && searchMode.startsWith('keyword (') && (

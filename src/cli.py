@@ -86,9 +86,10 @@ def check(live: bool = False, root: Path = ROOT) -> bool:
     line(OK if profile.exists() else WARN, "CV profile saved" if profile.exists() else "no CV yet (upload one in the Profile tab)")
 
     print("Models (config/models.toml)")
-    from src.llm.port import LLMError, llm
+    import tomllib
+    from src.llm.port import CONFIG_PATH, LLMError, llm
     tested = set()
-    for role in ("extract", "write", "route", "chat", "judge", "embed"):
+    for role in tomllib.loads(CONFIG_PATH.read_text(encoding="utf-8"))["roles"]:  # every role the config defines
         try:
             cfg = llm.config(role)
         except LLMError as e:
