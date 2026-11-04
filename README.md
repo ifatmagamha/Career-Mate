@@ -1,107 +1,10 @@
-# RecruitAI — Intelligent Candidate-Centric Career Agent
+# Career Mate
 
-**RecruitAI** is a state-of-the-art agentic AI ecosystem designed to automate and optimize the job search journey. Far more than a simple job board, it acts as a **Personalized Career Copilot** that autonomously hunts for offers, analyzes their hidden requirements, and builds tailored application materials.
+A personal job-search assistant you run on your own machine. Paste a job link (or write an offer by hand) and Career Mate turns it into a structured offer card, files it in your folders, tracks where you are with it, and lets you search everything by meaning or in plain language. Your CV becomes a structured profile the assistant can answer questions about.
 
----
+Each person runs a **private copy**: own database, CV, offers, contacts and API keys. Nothing is shared and there is no account to create.
 
-## System Workflow
-
-
-The system is built on an **Agentic Orchestration** model using **LangGraph**. Unlike traditional linear pipelines, RecruitAI maintains a cyclic state where specialized agents communicate to refine candidate profiles and job matches.
-
-### The Master Workflow
-1.  **Intent Routing**: Every user interaction starts at the **Router Agent**, which classifies the request and dispatches it to the correct specialized node.
-2.  **Autonomous Ingestion**:
-    *   **Folder Sync**: The system monitors `data/cvs/` and automatically parses new resumes using a specialized **Parser Agent**.
-    *   **Vector Indexing**: Parsed profiles are instantly chunked and indexed into a **FAISS Vector Store** for persistent RAG (Retrieval-Augmented Generation).
-3.  **Discovery Pipeline**:
-    *   **The Collector**: Scrapes live job data via Google Custom Search API, applying strict filters to avoid "login gates" or forum threads.
-    *   **The Analyzer**: Transforms messy snippet text into structured JSON schema (skills, missions, seniority).
-    *   **The Matcher**: Performs a dual-weighted semantic ranking (Context vs. Hard Skills).
-4.  **Action Hub**: The system can trigger "Writing" nodes to generate tailored CVs, Cover Letters, or cold emails grounded in the retrieved candidate profile.
-
----
-![RecruitAI Architecture](docs/Workflow_RecruitAI.png)
-
----
-
-## RAG Mechanism (Retrieval-Augmented Generation)
-
-The RAG engine is the "memory" of RecruitAI, ensuring that all AI responses are grounded in the user's actual professional history.
-
-*   **Chunking Technique**: We use the **RecursiveCharacterTextSplitter**.
-    *   **Chunk Size**: 1000 characters.
-    *   **Chunk Overlap**: 100 characters to preserve context between adjacent segments.
-    *   *Rationale*: This ensures that complex resume sections (e.g., a specific project description) stay cohesive while fitting into narrow LLM context windows.
-*   **Embedding Model**: `models/embedding-001` (Google Generative AI).
-    *   These 768-dimensional embeddings provide superior semantic understanding for professional terminology and skill relationships.
-*   **Storage & Indexing**: **FAISS (Facebook AI Similarity Search)**.
-    *   A high-performance local vector index saved in `data/faiss_index`.
-    *   Allows sub-millisecond similarity searches across candidate documents.
-*   **Retrieval Mechanism**: **Semantic Similarity Search**.
-    *   Top `k=3` chunks are retrieved for every profile query.
-    *   The retrieval is augmented by a structured **Metadata Profile** (extracted JSON) to provide both semantic nuance and hard-fact accuracy.
-
----
-
-## Agent Cards (SysCards)
-
-| Agent | Input | Output | Model role (`config/models.toml`) | Tools/Params |
-| :--- | :--- | :--- | :--- | :--- |
-| **Router** | Raw User Message | Intent Category | `route` | Few-shot Category Mapping |
-| **Parser** | PDF/TXT Raw Text | Structured JSON | `extract` | Schema-enforced Extraction |
-| **Collector** | Query + Location | List[`OfferRaw`] | `Google CSE` | Mock Fallback, Login Filtering |
-| **Analyzer** | `OfferRaw` Snippet | `OfferAnalyzed` | `extract` | Normalizers, Heuristic Fallback |
-| **Matcher** | Profile + Angebote | `MatchResult` | `Semantic Ranker` | Dual-weighted Embedding Match |
-| **Writer** | Profile + Job JD | Documents (MD) | `write` | Role-playing, Context Grounding |
-
----
-
-## Prompt Engineering Techniques
-
-RecruitAI uses a tiered prompt strategy to maximize reliability:
-
-1.  **Structured Output Enforcement (Parser/Analyzer)**:
-    *   *Technique*: Strict JSON schema definitions and "Chain of Extraction."
-    *   *Why*: LLMs often "chat" by default. We force a rigid JSON structure to ensure the frontend can render data without parsing errors.
-2.  **Context Injection & Grounding (Writer/RAG)**:
-    *   *Technique*: Context Wrapping and Identity Persona (e.g., "You are an expert Career Coach").
-    *   *Why*: Prevents hallucinations by explicitly telling the model to "USE ONLY the provided Context."
-3.  **Heuristic Hybridization (Analyzer/Matcher)**:
-    *   *Technique*: Combining LLM intelligence with developer-defined logic.
-    *   *Why*: LLMs can over-index on generic words; we inject seniority/contract type normalizers to maintain data integrity.
-4.  **Few-Shot Prompting (Router)**:
-    *   *Technique*: Providing 3-5 examples of query/intent pairs.
-    *   *Why*: Significantly reduces routing mistakes for ambiguous queries like "How do I look?".
-
----
-
-## Performance & Caching
-
-*   **FileSystem Caching**: Collected jobs are cached in `data/job_offers_raw.json` and `job_offers_analyzed.json`. This prevents redundant API calls and allows "Deep Search" results to be browsed offline.
-*   **Vector Cache**: FAISS indices are persisted to disk, avoiding the need to re-embed the entire CV for every session.
-*   **Cinematic Streaming**: The UI uses ND-JSON streaming to display AI responses word-by-word, reducing "perceived latency" even for complex agentic tasks.
-
----
-
-## Issues, Challenges & Improvements
-
-### Current Challenges
-*   **Collector Limitations**: The Google Search API is powerful but subject to strict daily quotas. Search results are sometimes saturated with forum threads rather than direct job postings.
-*   **PDF Extraction**: Highly complex, multi-column resume layouts can sometimes result in "garbled" text flows during the raw extraction phase.
-*   **Semantic Drift**: In fine-grained skill matching, embeddings might treat "Java" and "JavaScript" as highly similar because they frequently appear in similar contexts.
-
-### Pistes d'Améliorations (Roadmap)
-*   **Custom Scrapers**: Implementing a headless browser scraper (Playwright/Selenium) as a secondary collector tool to bypass search engine clutter.
-*   **Reranking Layer**: Adding a Cohere/Cross-Coder reranker after the Matcher to provide even more precise compatibility scores.
-*   **Agentic Self-Correction**: A feature where the Parser "reflects" on its own JSON output to fix obvious missing dates or email typos.
-*   **Human-in-the-loop Evaluation**: A native UI feedback system to allow users to "Thumbs Up/Down" matches, providing local reinforcement learning data.
-
----
-
-## Getting Started - Launch system
-
-Each person runs their own private copy (own database, CV and keys). **Follow [SETUP.md](SETUP.md)**, in short:
+**Set up your own copy: [SETUP.md](SETUP.md)** (about 15 minutes).
 
 ```bash
 uv sync --locked && npm --prefix ui install
@@ -111,4 +14,147 @@ uv run uvicorn src.api.server:app --reload
 npm --prefix ui run dev                # http://localhost:5173
 ```
 
-Models are chosen in `config/models.toml` only (edit `[defaults]` to switch every role); see SETUP.md section 6 to customize your copy.
+---
+
+## What you can do
+
+**Job Explorer**
+- **Capture an offer from a link.** Greenhouse links use Greenhouse's public API; pages that publish schema.org `JobPosting` data are read directly; other pages are read as text. The model fills in the rest: role, company, location, contract, remote policy, seniority, salary, deadline, required and nice-to-have skills, missions, requirements, summary. The original posting text is kept, so the offer survives the page disappearing.
+- **Paste the text** when a site blocks automated reading (LinkedIn, Welcome to the Jungle), or **add an offer by hand** with the same fields. Every offer card can be edited.
+- **Organize**: folders in the sidebar (create, rename, delete), drag cards onto a folder, statuses from *Saved* to *Accepted / Rejected / Archived*.
+- **Three layouts**: Grid, Table, and a Board with one column per status (drag a card to change its status).
+- **Search by meaning or keywords**: "apprentissage automatique" finds an English "Machine Learning" offer.
+- **Ask in plain language**: "alternance en hybride, deadline avant fin novembre" becomes visible filters (contract, remote, deadline) plus search words.
+- **Filters and saved views**: status, contract, remote, deadline, sort; save any combination with its layout.
+
+**Offer sheet**: all extracted fields, the original posting text, your notes, and **people to reach** (name, role, LinkedIn, notes, a "reached out" tick with its date).
+
+**Profile**: upload your CV (PDF or text). It is saved in your data folder, parsed into a structured, editable profile, and indexed so you can ask questions about it. The profile is restored at startup without calling a model.
+
+**AI Generator**: cover letters, emails and interview preparation based on an offer and your profile.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+  UI["Web UI<br/>React + Vite"] -->|REST| API["FastAPI<br/>src/api/server.py"]
+  API --> CAP["Offer capture<br/>src/agents/capture.py"]
+  API --> SEARCH["Hybrid search<br/>src/storage/offer_search.py"]
+  API --> ASK["Query interpreter<br/>src/agents/query_interpreter.py"]
+  API --> CV["CV ingestion<br/>src/ingestion/resume_parser.py"]
+  API --> GEN["Writer<br/>src/agents/writer.py"]
+  CAP & ASK & CV & GEN & SEARCH --> PORT["LLMPort<br/>src/llm/port.py"]
+  PORT -->|OpenAI-compatible HTTP| PROV["Providers from config/models.toml<br/>HF router · Groq · Gemini · vLLM · Ollama"]
+  CAP & SEARCH & ASK & API --> DB[("SQLite<br/>data/career_mate.db")]
+  CV --> FILES["data/cvs · profile.json · faiss_index"]
+```
+
+### Model layer: one interface, models in config
+
+All model calls go through **LLMPort** (`src/llm/port.py`), a single client for the OpenAI-compatible protocol, which Gemini, the Hugging Face router, Groq, vLLM, llama.cpp and Ollama all speak. App code asks for a **role**, never a model:
+
+| Role | Used for |
+|---|---|
+| `extract` | reading offers, parsing CVs |
+| `write` | letters, emails, interview prep |
+| `query` | turning a plain-language search into filters |
+| `route`, `chat` | the chat graph (routing, CV questions) |
+| `judge` | `evaluate.py` |
+| `embed` | embeddings for meaning-based search and CV search |
+
+`config/models.toml` is the only place model names live. `[defaults]` switches every role at once (default: `openai/gpt-oss-120b` on Groq through the Hugging Face router); a role can pin its own model (embeddings stay on `gemini-embedding-001`); env vars (`LLM_DEFAULT_MODEL`, `LLM_<ROLE>_MODEL`) override without editing. A new provider is one `[providers.<name>]` block.
+
+LLMPort validates structured output with Pydantic (one repair attempt), retries rate limits using the provider's `Retry-After`, stops at once on a daily quota, supports tool calling, and logs every call (model, prompt version, tokens, latency, cost) to the `llm_calls` table.
+
+### Data: one SQLite file per person
+
+| Table | Holds |
+|---|---|
+| `offers` | what the employer published: extracted fields, original text, source, model and prompt version that extracted it |
+| `applications` | what you do with it (1:1): status, folder, notes, applied date |
+| `folders`, `views`, `contacts` | your organization, saved filters, people to reach |
+| `events` | append-only history: captured, edited, moved, status changed, contact reached (with who did it: you, the AI or an automation) |
+| `offers_fts` | full-text index (SQLite FTS5), kept in sync by triggers |
+| `offer_embeddings` | vectors for meaning-based search, tagged with the model and a hash of the text |
+| `llm_calls` | every model call |
+
+Fixed value lists (statuses, contract types, remote policies) feed the forms, the filters and validation alike. `ENUM_FILTERS` in `src/storage/db.py` is the single registry of filterable fields: one entry makes a field filterable in SQL, in the API and in plain-language search. Skill spellings are merged when saved (`SKILL_ALIASES`: "postgres" becomes "PostgreSQL"). Existing databases are upgraded in place by `init`.
+
+### Search
+
+**Hybrid search** (`src/storage/offer_search.py`) merges two rankings with Reciprocal Rank Fusion, inside the active filters:
+- **keyword**: BM25 over the FTS5 index (prefix matching, accents ignored);
+- **meaning**: cosine similarity between your query and each offer's embedding. The embedded text is built from every text field an offer has, so new fields are searchable without code changes.
+
+Embeddings are computed lazily before a search, only for new or edited offers, and recomputed when the embedding model changes; saving an offer never waits for the embedding API. A result counts as related when its similarity is above a floor and close to the query's best match (both in `[roles.embed]` of `config/models.toml`). If embeddings are unavailable, search falls back to keywords and the UI says so.
+
+**Plain-language search** (`src/agents/query_interpreter.py`) builds its response schema at run time from `ENUM_FILTERS`, your folders and the sort options, so the model can only answer with real values. Relative dates ("fin novembre") are resolved from today. The result is applied as ordinary filters you can see and change.
+
+Measured on small labeled FR/EN sets (re-run with the scripts below):
+
+| | recall@3 | precision | MRR |
+|---|---|---|---|
+| keyword only | 0.45 | 0.60 | 0.60 |
+| **hybrid** | **0.90** | **1.00** | **1.00** |
+
+Plain-language search: 9/10 requests fully correct, filter precision 1.00, median 3.4 s.
+
+### CV and profile
+
+Upload → text extraction (pypdf) → structured profile (`extract` role) → saved to `data/profile.json` and indexed in a FAISS index (`data/faiss_index`, tagged with its embedding model). At startup the saved profile is reloaded; the index is rebuilt only if it is missing or was built with another embedding model.
+
+### Chat graph (backend only)
+
+The LangGraph chat (`src/graph/`: router, CV questions, general chat, legacy web-search pipeline via Google Custom Search) is still served at `/api/chat` and `/api/chat/stream`, but the web UI no longer has a chat page.
+
+---
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `src/api/server.py` | FastAPI endpoints |
+| `src/agents/` | offer capture, query interpreter, CV parser, writer, analyzer, legacy collector/matcher |
+| `src/llm/port.py` | LLMPort, the only model client |
+| `src/storage/db.py` | SQLite schema, migrations, queries, `ENUM_FILTERS`, `SKILL_ALIASES` |
+| `src/storage/offer_search.py` | hybrid search and offer embeddings |
+| `src/ingestion/resume_parser.py` | CV upload, profile persistence |
+| `src/cli.py` | `init`, `check`, `reindex` |
+| `src/prompts/` | prompt files |
+| `config/models.toml` | providers, roles, default model, search thresholds |
+| `ui/src/app/` | React app (`api.ts` reads `VITE_API_URL`) |
+| `scripts/` | `measure_search.py`, `measure_query.py` |
+| `docs/` | earlier design notes (may describe the previous architecture) |
+
+---
+
+## Checks and measurements
+
+```bash
+uv run python -m src.storage.db                 # schema, migrations, filters, search, views
+uv run python -m src.storage.offer_search       # hybrid search, embeddings, fallback
+uv run python -m src.agents.query_interpreter   # plain-language search plan
+uv run python -m src.llm.port                   # model layer: retries, structured output, config
+uv run python -m src.cli check --live           # your configuration, with one call per model
+uv run python scripts/measure_search.py         # search quality on real embeddings
+uv run python scripts/measure_query.py          # plain-language search accuracy
+```
+
+---
+
+## Privacy
+
+- Everything personal lives in your data folder (`DATA_DIR`) and `.env`, both git-ignored. Back up by copying the folder.
+- The API has no login and listens only on `127.0.0.1`; don't expose it on a shared network.
+- Text you capture or upload is sent to the configured model providers; free tiers may log prompts. Point the roles at a local model (`vllm` or `local` provider) to keep everything on your machine.
+
+---
+
+## Roadmap
+
+- Skill graph between your profile and your offers: "best for me" ranking, similar offers, skill gaps.
+- Activity timeline per offer, logged activities, next action with a due date and reminders.
+- Multi-value filters ("CDD or internship").
+- Optional PostgreSQL backend for a hosted, multi-user deployment.
