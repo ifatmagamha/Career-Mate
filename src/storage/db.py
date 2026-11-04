@@ -121,6 +121,15 @@ CREATE TRIGGER IF NOT EXISTS offers_fts_au AFTER UPDATE ON offers BEGIN
     VALUES (new.rowid, new.title, new.company, new.location, new.summary, new.skills, new.nice_to_have, new.raw_text);
 END;
 
+-- Dense vectors for semantic search (derived data: rebuilt when the text or the embedding model changes)
+CREATE TABLE IF NOT EXISTS offer_embeddings (
+    offer_id   TEXT PRIMARY KEY REFERENCES offers(id) ON DELETE CASCADE,
+    model      TEXT NOT NULL,
+    text_hash  TEXT NOT NULL,
+    dim        INTEGER NOT NULL,
+    vector     BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS events (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     offer_id       TEXT REFERENCES offers(id),

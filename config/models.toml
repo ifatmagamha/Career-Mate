@@ -69,6 +69,13 @@ params = { temperature = 0, max_tokens = 2048 }
 [roles.embed]     # pinned: no free embedding model on HF. Changing it means rebuilding every index.
 provider = "gemini"
 model = "gemini-embedding-001"
+# Offer search: a result is "related" if its cosine is >= min_similarity AND within similarity_margin of the
+# query's best match (absolute cosines shift with the query; rankings don't). Depends on the model: re-measure
+# with `uv run python scripts/measure_search.py` when you change it.
+# Measured 2026-11-04 on 10 FR/EN queries x 10 offers: hybrid recall@3 0.90, precision 1.00, MRR 1.00
+# (fixed cutoff 0.55: recall@3 0.95, precision 0.77, and it dropped short queries like "sales jobs").
+min_similarity = 0.45
+similarity_margin = 0.05
 
 # USD per 1M tokens, from the provider's pricing page. Without an entry, cost_usd is left empty.
 # Free-tier usage costs 0: [prices."openai/gpt-oss-120b:groq"] input = 0.0 output = 0.0

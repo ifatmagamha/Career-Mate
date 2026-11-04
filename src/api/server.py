@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 from typing import List, Optional, Any
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +20,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Search-Mode"],  # lets the UI tell when search fell back to keywords only
 )
 
 
@@ -465,6 +466,7 @@ from fastapi import Query
 
 @app.get("/api/offers")
 def get_offers(
+    response: Response,
     q: Optional[str] = None,
     status: List[str] = Query(default=[]),
     folder: Optional[str] = None,  # folder id, or "unfiled"
@@ -472,14 +474,20 @@ def get_offers(
     remote_policy: List[str] = Query(default=[]),
     deadline_before: Optional[str] = None,
     sort: Optional[str] = None,  # recent | deadline | title | company | updated | relevance
+    mode: str = "hybrid",  # hybrid | keyword | semantic
 ):
-    """Search (full text, BM25) + filters + sort. Same filter keys as saved views."""
+    """Search (keyword BM25 + semantic embeddings, fused) + filters + sort. Same filter keys as saved views."""
+    from src.storage.offer_search import MODES, search_offers
+    if mode not in MODES:
+        raise HTTPException(status_code=422, detail=f"mode must be one of {', '.join(MODES)}")
     with closing(db.connect()) as conn:
-        return db.query_offers(conn, {
+        offers, used = search_offers(conn, {
             "q": q, "status": status, "folder": folder, "contract_type": contract_type,
             "remote_policy": remote_policy,
             "deadline_before": deadline_before, "sort": sort,
-        })
+        }, mode=mode)
+    response.headers["X-Search-Mode"] = used  # e.g. "keyword (semantic unavailable)" when embeddings fail
+    return offers
 
 
 @app.get("/api/offer-facets")

@@ -155,6 +155,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [savingView, setSavingView] = useState<string | null>(null); // name being typed
   const [showAdd, setShowAdd] = useState(false);
+  const [searchMode, setSearchMode] = useState('');
   const requestId = useRef(0);
 
   const fetchOffers = async () => {
@@ -167,7 +168,10 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
     try {
       const res = await fetch(`${API}/api/offers?${params}`);
       const data = await res.json();
-      if (id === requestId.current) setJobs(data.map(toJob)); // ignore out-of-order answers
+      if (id === requestId.current) { // ignore out-of-order answers
+        setJobs(data.map(toJob));
+        setSearchMode(res.headers.get('X-Search-Mode') || '');
+      }
     } catch (e) {
       console.error('Failed to load offers', e);
     }
@@ -581,7 +585,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
               <input
                 value={filters.q}
                 onChange={(e) => setFilter({ q: e.target.value })}
-                placeholder="Search title, company, skills, posting text…"
+                placeholder="Search by meaning or keywords, e.g. remote data roles, apprentissage automatique…"
                 aria-label="Search offers"
                 className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-blue-500/50"
               />
@@ -652,6 +656,9 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
 
           <h2 className="mb-4 text-sm font-medium text-zinc-400">
             {scopeName} <span className="text-zinc-600 tabular-nums">· {jobs.length}</span>
+            {filters.q && searchMode.startsWith('keyword (') && (
+              <span className="ml-2 text-xs text-amber-400/80">Keyword matches only: meaning-based search is unavailable right now</span>
+            )}
           </h2>
 
           {loading ? (

@@ -4,6 +4,7 @@ Set up and check a Career Mate instance (one private copy per person).
   uv run python -m src.cli init           create .env, the data folder and the database (safe to re-run)
   uv run python -m src.cli check          show what is configured and what is missing
   uv run python -m src.cli check --live   also send one tiny request to each configured model
+  uv run python -m src.cli reindex        embed offers for meaning-based search (otherwise done on first search)
 """
 from __future__ import annotations
 
@@ -75,6 +76,10 @@ def check(live: bool = False, root: Path = ROOT) -> bool:
             n = conn.execute("SELECT COUNT(*) FROM offers").fetchone()[0]
             v = conn.execute("PRAGMA user_version").fetchone()[0]
         line(OK, f"database {path} (schema v{v}, {n} offers)")
+        with closing(db.connect(path)) as conn:
+            e = conn.execute("SELECT COUNT(*) FROM offer_embeddings").fetchone()[0]
+        line(OK if e >= n else WARN, f"{e}/{n} offers embedded for meaning-based search"
+             + ("" if e >= n else " (done on the next search, or run `uv run python -m src.cli reindex`)"))
     else:
         line(FAIL, f"no database at {path}: run `uv run python -m src.cli init`")
     profile = data_dir(root) / "profile.json"
@@ -112,6 +117,7 @@ def main() -> None:
     sub.add_parser("init", help="create .env, data folder and database")
     c = sub.add_parser("check", help="show configuration status")
     c.add_argument("--live", action="store_true", help="send one tiny request to each configured model")
+    sub.add_parser("reindex", help="embed new or changed offers for meaning-based search")
     sub.add_parser("selftest")
     args = ap.parse_args()
 
@@ -120,6 +126,12 @@ def main() -> None:
         print("\nNext: put your keys in .env, then `uv run python -m src.cli check --live`.")
     elif args.cmd == "check":
         sys.exit(0 if check(args.live) else 1)
+    elif args.cmd == "reindex":
+        load_dotenv(ROOT / ".env", override=False)
+        from src.storage import db
+        from src.storage.offer_search import ensure_embeddings
+        with closing(db.connect(data_dir(ROOT) / "career_mate.db")) as conn:
+            print(f"{OK} {ensure_embeddings(conn)} offer(s) embedded (unchanged ones are skipped)")
     else:
         _selftest()
 
