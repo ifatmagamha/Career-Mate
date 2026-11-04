@@ -3,18 +3,10 @@ import time
 import pandas as pd
 from typing import List
 from langchain_core.messages import HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from src.graph.build_graph import build_recruit_graph
-from src.config.settings import settings
 from src.config.logging import logger
+from src.llm.port import llm  # judge model: role "judge" in config/models.toml
 from src.schemas.candidate import CandidateProfile
-
-# Initialize Judge LLM
-judge_llm = ChatGoogleGenerativeAI(
-    model=settings.GEMINI_MODEL,
-    google_api_key=settings.GEMINI_API_KEY,
-    temperature=0
-)
 
 JUDGE_PROMPT = """
 You are an impartial evaluator for a recruitment AI.
@@ -109,13 +101,13 @@ async def evaluate():
             latency = time.time() - start_time
             
             # Judge
-            judge_response = judge_llm.invoke(JUDGE_PROMPT.format(
+            judge_response = llm.complete(JUDGE_PROMPT.format(
                 question=question,
                 intent=intent,
                 answer=actual_answer
-            ))
+            ), role="judge")
             try:
-                score = int(judge_response.content.strip())
+                score = int(judge_response.strip())
             except:
                 score = 1
             

@@ -14,15 +14,10 @@ def _get_env(name: str, default: str | None = None, *, required: bool = False) -
 
 @dataclass(frozen=True)
 class Settings:
-    # Google Custom Search (Collector)
-    GOOGLE_API_KEY: str
-    GOOGLE_CSE_ID: str
-
-    # Gemini (Analyzer/Writer/Matcher explanations)
-    GEMINI_API_KEY: str
-    GEMINI_MODEL: str = "gemini-2.0-flash"
-    GEMINI_MODEL_FAST: str = "gemini-2.0-flash"
-    GEMINI_MODEL_SMART: str = "gemini-2.0-flash"
+    # Google Custom Search (legacy search collector only; checked when a search runs)
+    # Models and their API keys are configured in config/models.toml, not here.
+    GOOGLE_API_KEY: str = ""
+    GOOGLE_CSE_ID: str = ""
 
     # Paths
     PROJECT_ROOT: str = ""
@@ -35,18 +30,13 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    # charge .env depuis la racine si présent
     load_dotenv(override=False)
 
     project_root = os.getcwd()
 
     return Settings(
-        GOOGLE_API_KEY=_get_env("GOOGLE_API_KEY", required=True),
-        GOOGLE_CSE_ID=_get_env("GOOGLE_CSE_ID", required=True),
-        GEMINI_API_KEY=_get_env("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""), required=True),
-        GEMINI_MODEL=_get_env("GEMINI_MODEL", "gemini-2.0-flash"),
-        GEMINI_MODEL_FAST=_get_env("GEMINI_MODEL_FAST", "gemini-2.0-flash"),
-        GEMINI_MODEL_SMART=_get_env("GEMINI_MODEL_SMART", "gemini-2.0-flash"),
+        GOOGLE_API_KEY=_get_env("GOOGLE_API_KEY", ""),
+        GOOGLE_CSE_ID=_get_env("GOOGLE_CSE_ID", ""),
         PROJECT_ROOT=project_root,
         DATA_DIR=_get_env("DATA_DIR", "data"),
         GENERATED_DIR=_get_env("GENERATED_DIR", "data/generated"),

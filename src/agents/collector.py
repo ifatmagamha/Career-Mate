@@ -124,6 +124,9 @@ def collect_offers(query: str, location: str, limit: int = 10) -> List[OfferRaw]
     remaining = max(1, limit)
     start = 1
 
+    if not settings.GOOGLE_API_KEY or not settings.GOOGLE_CSE_ID:
+        raise RuntimeError("Web search needs GOOGLE_API_KEY and GOOGLE_CSE_ID in .env")
+
     logger.info(f"[collector] query='{query}' location='{location}' limit={limit}")
 
     while remaining > 0:

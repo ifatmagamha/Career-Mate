@@ -1,7 +1,20 @@
 .env
 venv/
+.venv/
 __pycache__/
 *.pyc
 data/uploads/*
 data/cvs/*
+data/profile.json
+# personal data: never commit
+data/auth.json
+data/users/
+data/chroma_db/
+data/generated/
+resume.txt
+data/faiss_index/
 ui/node_modules
+data/*.db
+
+specs/*
+evals/*

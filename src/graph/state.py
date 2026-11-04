@@ -34,6 +34,7 @@ class RecruitAIState(TypedDict, total=False):
     errors: List[str]
     retrieved_chunks: List[str]  # Chunks retrieved by RAG
     meta: Dict[str, Any]  # place pour infos annexes (timings, tokens, etc.)
+    active_node: str  # last agent that answered (shown in the UI)
 
 
 def new_state(

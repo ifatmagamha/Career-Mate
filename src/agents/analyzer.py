@@ -5,8 +5,7 @@ import re
 from typing import Any, Dict, List
 
 from src.config.logging import logger
-from src.config.settings import settings
-from src.llm.gemini_client import llm, extract_json_dict
+from src.llm.port import llm, extract_json, prompt_version
 from src.schemas.job_offer import OfferRaw, OfferAnalyzed
 from src.utils.prompts import load_prompt
 
@@ -96,9 +95,8 @@ def analyze_offer_llm(offer: OfferRaw) -> OfferAnalyzed:
     prompt_template = load_prompt("analyzer")
     prompt = prompt_template.replace("{raw_text}", f"Title: {offer.title}\nCompany: {offer.company}\nLocation: {offer.location}\nDescription: {offer.description or ''}")
 
-    logger.info(f"[analyzer] Using SMART model: {settings.GEMINI_MODEL_SMART}")
-    text = llm.generate_text(prompt, model=settings.GEMINI_MODEL_SMART, temperature=0.1, max_output_tokens=650)
-    data: Dict[str, Any] = extract_json_dict(text)
+    text = llm.complete(prompt, role="extract", prompt_version=prompt_version(prompt_template), temperature=0.1)
+    data: Dict[str, Any] = extract_json(text)
 
     # Force trusted fields (prevents missing url + prevents LLM from changing them)
     data["url"] = str(offer.url)

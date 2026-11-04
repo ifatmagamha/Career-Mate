@@ -44,6 +44,30 @@ class OfferAnalyzed(BaseModel):
     summary: Optional[str] = Field(default=None, description="Résumé très court (1-2 phrases max)")
 
 
+SheetContract = Literal["permanent", "fixed_term", "internship", "apprenticeship", "freelance", "part_time", "unknown"]
+SheetRemote = Literal["onsite", "hybrid", "remote", "unknown"]
+SheetSeniority = Literal["intern", "junior", "mid", "senior", "lead", "unknown"]
+
+
+class OfferSheet(BaseModel):
+    """Fiche offre synthétique produite par la capture (lien ou texte collé)."""
+    model_config = ConfigDict(extra="ignore")
+
+    title: str
+    company: Optional[str] = None
+    location: Optional[str] = None
+    remote_policy: str = Field(default="unknown", description="One of SheetRemote")
+    contract_type: str = Field(default="unknown", description="One of SheetContract")
+    seniority: str = Field(default="unknown", description="One of SheetSeniority")
+    salary: Optional[str] = None
+    deadline: Optional[str] = Field(default=None, description="YYYY-MM-DD")
+    skills: List[str] = Field(default_factory=list, description="Required skills")
+    nice_to_have: List[str] = Field(default_factory=list, description="Optional / bonus skills")
+    missions: List[str] = Field(default_factory=list)
+    requirements: List[str] = Field(default_factory=list)
+    summary: Optional[str] = None
+
+
 class MatchResult(BaseModel):
     """Résultat du matching candidat <-> offre."""
     model_config = ConfigDict(extra="ignore")

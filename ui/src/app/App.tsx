@@ -1,20 +1,16 @@
 import { useState } from 'react';
-import { ChatView } from '@/app/components/ChatView';
-import { JobExplorer } from '@/app/components/JobExplorer';
+import { JobExplorer, toJob } from '@/app/components/JobExplorer';
 import { JobDetail } from '@/app/components/JobDetail';
 import { GeneratorView } from '@/app/components/GeneratorView';
 import { ProfileView } from '@/app/components/ProfileView';
-import { AgentDashboard } from '@/app/components/AgentDashboard';
 import {
-  Home,
   Briefcase,
   FileText,
   User,
-  Sparkles,
-  Activity
+  Sparkles
 } from 'lucide-react';
 
-type View = 'home' | 'jobs' | 'generator' | 'profile' | 'agents' | 'jobDetail';
+type View = 'jobs' | 'generator' | 'profile' | 'jobDetail';
 
 interface Job {
   id: string;
@@ -32,7 +28,7 @@ interface Job {
 }
 
 function App() {
-  const [currentView, setCurrentView] = useState<View>('home');
+  const [currentView, setCurrentView] = useState<View>('jobs');
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [initialJobDescription, setInitialJobDescription] = useState<string>('');
 
@@ -53,8 +49,6 @@ function App() {
 
   const renderView = () => {
     switch (currentView) {
-      case 'home':
-        return <ChatView onNavigateToJobs={() => setCurrentView('jobs')} />;
       case 'jobs':
         return <JobExplorer onJobSelect={handleJobSelect} />;
       case 'jobDetail':
@@ -62,15 +56,14 @@ function App() {
           job={selectedJob}
           onBack={handleBackToJobs}
           onGenerateCoverLetter={handleGenerateFromJob}
+          onUpdated={(offer) => setSelectedJob(toJob(offer) as any)}
         />;
       case 'generator':
         return <GeneratorView initialDescription={initialJobDescription} />;
       case 'profile':
         return <ProfileView />;
-      case 'agents':
-        return <AgentDashboard />;
       default:
-        return <ChatView onNavigateToJobs={() => setCurrentView('jobs')} />;
+        return <JobExplorer onJobSelect={handleJobSelect} />;
     }
   };
 
@@ -91,12 +84,6 @@ function App() {
             {/* Navigation Tabs */}
             <div className="flex items-center gap-2">
               <NavButton
-                icon={<Home className="w-4 h-4" />}
-                label="Home"
-                active={currentView === 'home'}
-                onClick={() => setCurrentView('home')}
-              />
-              <NavButton
                 icon={<Briefcase className="w-4 h-4" />}
                 label="Job Explorer"
                 active={currentView === 'jobs' || currentView === 'jobDetail'}
@@ -113,12 +100,6 @@ function App() {
                 label="Profile"
                 active={currentView === 'profile'}
                 onClick={() => setCurrentView('profile')}
-              />
-              <NavButton
-                icon={<Activity className="w-4 h-4" />}
-                label="Agents"
-                active={currentView === 'agents'}
-                onClick={() => setCurrentView('agents')}
               />
             </div>
           </div>
