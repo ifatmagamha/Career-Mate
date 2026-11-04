@@ -4,17 +4,15 @@ import { JobExplorer } from '@/app/components/JobExplorer';
 import { JobDetail } from '@/app/components/JobDetail';
 import { GeneratorView } from '@/app/components/GeneratorView';
 import { ProfileView } from '@/app/components/ProfileView';
-import { AgentDashboard } from '@/app/components/AgentDashboard';
 import {
   Home,
   Briefcase,
   FileText,
   User,
-  Sparkles,
-  Activity
+  Sparkles
 } from 'lucide-react';
 
-type View = 'home' | 'jobs' | 'generator' | 'profile' | 'agents' | 'jobDetail';
+type View = 'home' | 'jobs' | 'generator' | 'profile' | 'jobDetail';
 
 interface Job {
   id: string;
@@ -67,8 +65,6 @@ function App() {
         return <GeneratorView initialDescription={initialJobDescription} />;
       case 'profile':
         return <ProfileView />;
-      case 'agents':
-        return <AgentDashboard />;
       default:
         return <ChatView onNavigateToJobs={() => setCurrentView('jobs')} />;
     }
@@ -113,12 +109,6 @@ function App() {
                 label="Profile"
                 active={currentView === 'profile'}
                 onClick={() => setCurrentView('profile')}
-              />
-              <NavButton
-                icon={<Activity className="w-4 h-4" />}
-                label="Agents"
-                active={currentView === 'agents'}
-                onClick={() => setCurrentView('agents')}
               />
             </div>
           </div>

@@ -46,15 +46,14 @@ The RAG engine is the "memory" of RecruitAI, ensuring that all AI responses are 
 
 ## Agent Cards (SysCards)
 
-| Agent | Input | Output | Model | Tools/Params |
+| Agent | Input | Output | Model role (`config/models.toml`) | Tools/Params |
 | :--- | :--- | :--- | :--- | :--- |
-| **Router** | Raw User Message | Intent Category | `gemini-2.0-flash` | Few-shot Category Mapping |
-| **Parser** | PDF/TXT Raw Text | Structured JSON | `gemini-2.0-flash` | Schema-enforced Extraction |
+| **Router** | Raw User Message | Intent Category | `route` | Few-shot Category Mapping |
+| **Parser** | PDF/TXT Raw Text | Structured JSON | `extract` | Schema-enforced Extraction |
 | **Collector** | Query + Location | List[`OfferRaw`] | `Google CSE` | Mock Fallback, Login Filtering |
-| **Analyzer** | `OfferRaw` Snippet | `OfferAnalyzed` | `gemini-2.0-flash` | Normalizers, Heuristic Fallback |
+| **Analyzer** | `OfferRaw` Snippet | `OfferAnalyzed` | `extract` | Normalizers, Heuristic Fallback |
 | **Matcher** | Profile + Angebote | `MatchResult` | `Semantic Ranker` | Dual-weighted Embedding Match |
-| **Stats** | Natural Language | Table/Trends | `gemini-2.0-flash` | Pandas Agent, Python REPL |
-| **Writer** | Profile + Job JD | Documents (MD) | `gemini-2.0-flash` | Role-playing, Context Grounding |
+| **Writer** | Profile + Job JD | Documents (MD) | `write` | Role-playing, Context Grounding |
 
 ---
 
@@ -102,7 +101,8 @@ RecruitAI uses a tiered prompt strategy to maximize reliability:
 
 ## Getting Started - Launch system
 
-1.  **Environment**: Clone the repo and run `pip install -r requirements.txt`.
-2.  **API Keys**: Add `GEMINI_API_KEY`, `GOOGLE_API_KEY`, and `GOOGLE_CSE_ID` to your `.env` or system environment.
-3.  **The Engine**: Start the backend with `python -m uvicorn src.api.server:app --reload`.
+1.  **Environment**: Install [uv](https://docs.astral.sh/uv/), clone the repo and run `uv sync --locked` (creates `.venv` from `uv.lock`, Python 3.14 from `.python-version`).
+2.  **API Keys**: In `.env`, add the key of each provider used in `config/models.toml` (default: `HF_TOKEN` for chat models, `GEMINI_API_KEY` for embeddings). `GOOGLE_API_KEY` and `GOOGLE_CSE_ID` are only needed for the legacy web-search pipeline.
+3.  **The Engine**: Start the backend with `uv run uvicorn src.api.server:app --reload`.
+    Models are chosen in `config/models.toml` only: edit `[defaults]` to switch every role, pin a role to override it, or try one without editing with `LLM_DEFAULT_MODEL=...` / `LLM_<ROLE>_MODEL=...`. Any OpenAI-compatible provider (Hugging Face router, Groq, Gemini, vLLM, Ollama) is a `[providers.<name>]` block. Default: `openai/gpt-oss-120b` on Groq through the Hugging Face router (`HF_TOKEN`, with your Groq key saved as a custom provider key on Hugging Face); embeddings stay on Gemini (`GEMINI_API_KEY`).
 4.  **The Interface**: Navigate to `ui/`, run `npm install` then `npm run dev`.

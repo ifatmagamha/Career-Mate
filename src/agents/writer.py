@@ -3,7 +3,7 @@ from typing import Dict, Any, Tuple, List
 
 from src.config.settings import settings
 from src.export.pdf import render_structured_pdf
-from src.llm.gemini_client import llm, extract_json_dict
+from src.llm.port import llm, extract_json, prompt_version
 from src.schemas.candidate import CandidateProfile
 from src.schemas.job_offer import OfferAnalyzed
 from src.utils.prompts import load_prompt
@@ -73,8 +73,8 @@ def generate_structured_cv(candidate: CandidateProfile, offer: OfferAnalyzed) ->
                            .replace("{cv_raw}", cv_raw)
 
     try:
-        text = llm.generate_text(prompt, temperature=0.2, max_output_tokens=2000) or ""
-        data = extract_json_dict(text)
+        text = llm.complete(prompt, role="write", prompt_version=prompt_version(prompt_template), temperature=0.2) or ""
+        data = extract_json(text)
 
         # minimal safety defaults
         data.setdefault("header", {})
@@ -103,8 +103,8 @@ def generate_structured_letter(candidate: CandidateProfile, offer: OfferAnalyzed
                            .replace("{cv_raw}", cv_raw)
 
     try:
-        text = llm.generate_text(prompt, temperature=0.3, max_output_tokens=1500) or ""
-        data = extract_json_dict(text)
+        text = llm.complete(prompt, role="write", prompt_version=prompt_version(prompt_template), temperature=0.3) or ""
+        data = extract_json(text)
         if not isinstance(data.get("body"), list):
             data["body"] = []
         return data
@@ -198,7 +198,7 @@ def generate_cold_email(candidate: CandidateProfile, offer: OfferAnalyzed, tone:
                            .replace("{tone}", tone) \
                            .replace("{cv_raw}", cv_raw)
     try:
-        text = llm.generate_text(prompt, temperature=0.4, max_output_tokens=800) or ""
+        text = llm.complete(prompt, role="write", prompt_version=prompt_version(prompt_template), temperature=0.4) or ""
         return text
     except Exception as e:
         logger.error(f"Error generating Email: {e}")
@@ -215,7 +215,7 @@ def generate_interview_prep(candidate: CandidateProfile, offer: OfferAnalyzed, d
                            .replace("{difficulty}", difficulty) \
                            .replace("{cv_raw}", cv_raw)
     try:
-        text = llm.generate_text(prompt, temperature=0.5, max_output_tokens=2000) or ""
+        text = llm.complete(prompt, role="write", prompt_version=prompt_version(prompt_template), temperature=0.5) or ""
         return text
     except Exception as e:
         logger.error(f"Error generating Interview Prep: {e}")

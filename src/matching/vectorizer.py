@@ -34,19 +34,15 @@ def build_candidate_text(cv_text: str, target_keywords: List[str] | None = None,
     return _normalize_text(" ".join(parts))
 
 
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from src.config.settings import settings
+from src.storage.vector_store import PortEmbeddings
 
 class SemanticMatcher:
     """
-    Semantic similarity matcher using Google Gemini Embeddings.
+    Semantic similarity matcher using the 'embed' role of LLMPort.
     """
 
     def __init__(self):
-        self.embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/gemini-embedding-001",
-            google_api_key=settings.GEMINI_API_KEY
-        )
+        self.embeddings = PortEmbeddings()
 
     def score(self, candidate_text: str, offer_texts: List[str]) -> List[float]:
         if not candidate_text:

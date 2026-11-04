@@ -10,64 +10,35 @@ from src.agents.tracker import track_matches       # on crée juste après
 from src.config.settings import settings
 from src.graph.state import RecruitAIState
 from src.storage.io import save_json
-import time
-from src.api.agent_traces import log_agent_trace
 
 def node_collect(state: RecruitAIState) -> RecruitAIState:
-    start_time = time.time()
-    try:
-        offers_raw = collect_offers(
-            query=state["query"],
-            location=state.get("location", "Paris"), # Default for evaulation
-            limit=state.get("limit", 10),
-        )
-        state["offers_raw"] = offers_raw
-        save_json(Path(settings.DATA_DIR) / "job_offers_raw.json", offers_raw)
-        
-        duration = (time.time() - start_time) * 1000
-        log_agent_trace("Collector", f"Query: {state['query']}", f"Found {len(offers_raw)} offers", duration)
-        return state
-    except Exception as e:
-        duration = (time.time() - start_time) * 1000
-        log_agent_trace("Collector", state["query"], str(e), duration, status="error")
-        raise e
+    offers_raw = collect_offers(
+        query=state["query"],
+        location=state.get("location", "Paris"), # Default for evaulation
+        limit=state.get("limit", 10),
+    )
+    state["offers_raw"] = offers_raw
+    save_json(Path(settings.DATA_DIR) / "job_offers_raw.json", offers_raw)
+    return state
 
 def node_analyze(state: RecruitAIState) -> RecruitAIState:
-    start_time = time.time()
-    try:
-        offers_analyzed = analyze_offers(
-            state["offers_raw"],
-            llm_max=state.get("llm_max", 2),
-        )
-        state["offers_analyzed"] = offers_analyzed
-        save_json(Path(settings.DATA_DIR) / "job_offers_analyzed.json", offers_analyzed)
-        
-        duration = (time.time() - start_time) * 1000
-        log_agent_trace("Analyzer", f"Input: {len(state['offers_raw'])} raw", f"Analyzed {len(offers_analyzed)} offers", duration)
-        return state
-    except Exception as e:
-        duration = (time.time() - start_time) * 1000
-        log_agent_trace("Analyzer", "Batch analysis", str(e), duration, status="error")
-        raise e
+    offers_analyzed = analyze_offers(
+        state["offers_raw"],
+        llm_max=state.get("llm_max", 2),
+    )
+    state["offers_analyzed"] = offers_analyzed
+    save_json(Path(settings.DATA_DIR) / "job_offers_analyzed.json", offers_analyzed)
+    return state
 
 def node_match(state: RecruitAIState) -> RecruitAIState:
-    start_time = time.time()
-    try:
-        matches = match_offers(
-            state["candidate"],
-            state["offers_analyzed"],
-            top_k=state.get("top_k", 10),
-        )
-        state["matches"] = matches
-        save_json(Path(settings.DATA_DIR) / "matches.json", matches)
-        
-        duration = (time.time() - start_time) * 1000
-        log_agent_trace("Matcher", f"Candidate: {state['candidate'].full_name}", f"Ranked {len(matches)} matches", duration)
-        return state
-    except Exception as e:
-        duration = (time.time() - start_time) * 1000
-        log_agent_trace("Matcher", "Matching process", str(e), duration, status="error")
-        raise e
+    matches = match_offers(
+        state["candidate"],
+        state["offers_analyzed"],
+        top_k=state.get("top_k", 10),
+    )
+    state["matches"] = matches
+    save_json(Path(settings.DATA_DIR) / "matches.json", matches)
+    return state
 
 
 def node_write(state: RecruitAIState) -> RecruitAIState:

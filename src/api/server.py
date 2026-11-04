@@ -3,12 +3,12 @@ from pydantic import BaseModel
 from typing import List, Optional, Any
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import HumanMessage
-import uuid
+from contextlib import closing
 from datetime import datetime
 
 from src.graph.build_graph import build_recruit_graph
+from src.storage import db
 from src.config.logging import logger
-from src.api.agent_traces import router as traces_router
 
 # Initialize FastAPI
 app = FastAPI(title="Career Mate API")
@@ -22,8 +22,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(traces_router)
 
 # Initialize Graph
 graph = build_recruit_graph()
@@ -101,47 +99,39 @@ from src.ingestion.resume_parser import handle_resume_upload
 
 @app.on_event("startup")
 async def startup_event():
-    """Sync CVs from folder on startup."""
-    from src.ingestion.resume_parser import sync_cvs_folder
+    """Reload the saved profile (data/profile.json); parse the latest CV in data/cvs only if none is saved."""
+    from src.ingestion.resume_parser import restore_profile
+    from src.data.mock_profiles import MOCK_PROFILES
     try:
-        count = await sync_cvs_folder()
-        logger.info(f"Startup: Synced {count} CVs from data/cvs")
+        profile = await asyncio.to_thread(restore_profile)
+        if profile:
+            MOCK_PROFILES["custom"] = profile
+        logger.info(f"Startup: profile {'loaded for ' + str(profile.full_name) if profile else 'not found (upload a CV)'}")
     except Exception as e:
-        logger.error(f"Startup sync failed: {e}")
+        logger.error(f"Startup profile restore failed: {e}")
 
 @app.post("/api/upload_resume")
 async def upload_resume(file: UploadFile = File(...)):
     """
-    Parse uploaded resume and switch active profile to 'custom'.
+    Save the CV in data/cvs, parse it, save the profile and set it as active.
     """
-    import time
-    from src.api.agent_traces import log_agent_trace
-    start_time = time.time()
+    global ACTIVE_PROFILE_KEY
     try:
-        global ACTIVE_PROFILE_KEY
-        # 1. Process Upload
-        profile, raw_data = await handle_resume_upload(file, session_id="user_123")
-        
-        # 2. Persist to Runtime Store (MVP)
-        from src.data.mock_profiles import MOCK_PROFILES
-        MOCK_PROFILES["custom"] = profile
-        
-        # 3. Switch Context
-        ACTIVE_PROFILE_KEY = "custom"
-        
-        duration = (time.time() - start_time) * 1000
-        log_agent_trace("Parser", f"File: {file.filename}", f"Parsed profile for {profile.full_name}", duration)
-        
-        return {
-            "status": "success",
-            "profile": raw_data,
-            "message": "Resume parsed and set as active."
-        }
+        profile, raw_data = await handle_resume_upload(file)
+    except ValueError as e:  # wrong type, too large, unreadable
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        duration = (time.time() - start_time) * 1000
-        log_agent_trace("Parser", f"File: {file.filename}", str(e), duration, status="error")
         logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+    from src.data.mock_profiles import MOCK_PROFILES
+    MOCK_PROFILES["custom"] = profile
+    ACTIVE_PROFILE_KEY = "custom"
+    return {
+        "status": "success",
+        "profile": raw_data,
+        "message": "Resume saved, parsed and set as active."
+    }
 
 @app.post("/api/profile/sync")
 async def sync_profile_folder():
@@ -215,10 +205,13 @@ async def save_profile(profile_data: dict):
     try:
         from src.data.mock_profiles import MOCK_PROFILES
         from src.schemas.candidate import CandidateProfile
-        
-        # In a real app, we'd persist this to a DB. For MVP, we update MOCK_PROFILES.
-        MOCK_PROFILES["custom"] = CandidateProfile(**profile_data)
-        
+        from src.ingestion.resume_parser import save_profile as persist_profile, index_profile_for_rag
+
+        profile = CandidateProfile(**profile_data)
+        MOCK_PROFILES["custom"] = profile
+        persist_profile(profile)              # survives restarts (data/profile.json)
+        await asyncio.to_thread(index_profile_for_rag, profile)  # RAG answers from the edited profile
+
         return {"status": "success", "message": "Profile updated successfully"}
     except Exception as e:
         logger.error(f"Save failed: {e}")
@@ -269,8 +262,7 @@ async def chat_stream(req: ChatRequest):
         # Final metadata
         node = state.get("active_node")
         agent_name = "RecruitAI"
-        if node == "stats": agent_name = "Stats Agent"
-        elif node == "rag": agent_name = "RAG Agent"
+        if node == "rag": agent_name = "RAG Agent"
         elif node == "job_pipeline": agent_name = "Job Pipeline"
         elif node == "chat": agent_name = "RecruitAI"
         
@@ -381,37 +373,98 @@ def get_jobs():
 
 # --- Applications Endpoints ---
 
+# An application is what I do with an offer (1:1); stage == applications.status
+
+def _to_application(o: dict) -> dict:
+    return {
+        "id": o["application_id"],
+        "offerId": o["id"],
+        "title": o["title"],
+        "company": o["company"] or "Unknown",
+        "location": o["location"] or "Unknown",
+        "salary": o["salary"] or "N/A",
+        "matchScore": o["match_score"] or 0,
+        "stage": o["status"],
+        "appliedDate": datetime.fromisoformat(o["applied_at"] or o["created_at"]).strftime("%b %d, %Y"),
+    }
+
+@app.get("/api/statuses")
+def get_statuses():
+    return list(db.STATUSES)
+
 @app.get("/api/applications")
 def get_applications():
-    from src.data.mock_applications import MOCK_APPLICATIONS
-    return list(MOCK_APPLICATIONS.values())
+    with closing(db.connect()) as conn:
+        return [_to_application(o) for o in db.list_offers(conn)]
 
 @app.post("/api/applications")
 def add_application(app_data: dict):
-    from src.data.mock_applications import MOCK_APPLICATIONS, Application
-    
-    app_id = str(uuid.uuid4())
-    new_app = Application(
-        id=app_id,
-        title=app_data.get("title", "Unknown"),
-        company=app_data.get("company", "Unknown"),
-        location=app_data.get("location", "Unknown"),
-        salary=app_data.get("salary", "N/A"),
-        matchScore=app_data.get("matchScore", 0),
-        stage=app_data.get("stage", "saved"),
-        appliedDate=datetime.now().strftime("%b %d, %Y")
-    )
-    MOCK_APPLICATIONS[app_id] = new_app
-    return new_app
+    with closing(db.connect()) as conn:
+        try:
+            offer = db.insert_offer(conn, {
+                "title": app_data.get("title", "Unknown"),
+                "company": app_data.get("company"),
+                "location": app_data.get("location"),
+                "salary": app_data.get("salary"),
+                "match_score": app_data.get("matchScore"),
+                "source": "manual",
+            }, status=app_data.get("stage", "saved"))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        return _to_application(offer)
 
 @app.patch("/api/applications/{app_id}")
 def update_application(app_id: str, updates: dict):
-    from src.data.mock_applications import MOCK_APPLICATIONS
-    if app_id not in MOCK_APPLICATIONS:
-        raise HTTPException(status_code=404, detail="Application not found")
-    
-    app = MOCK_APPLICATIONS[app_id]
-    if "stage" in updates:
-        app.stage = updates["stage"]
-    
-    return app
+    with closing(db.connect()) as conn:
+        offer = db.get_offer_by_application(conn, app_id)
+        if not offer:
+            raise HTTPException(status_code=404, detail="Application not found")
+        if "stage" in updates:
+            try:
+                offer = db.update_status(conn, app_id, updates["stage"])
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+        return _to_application(offer)
+
+# --- Offers (capture) ---
+
+class CaptureRequest(BaseModel):
+    url: Optional[str] = None
+    text: Optional[str] = None
+
+@app.post("/api/offers/capture")
+def capture(req: CaptureRequest):
+    from src.agents.capture import capture_offer, CaptureError
+
+    url = req.url.strip().split("#")[0] if req.url and req.url.strip() else None
+    text = req.text.strip() if req.text and req.text.strip() else None
+
+    with closing(db.connect()) as conn:
+        if url and not text:
+            existing = db.find_offer_by_url(conn, url)
+            if existing:
+                return {"offer": existing, "duplicate": True}
+        try:
+            fields = capture_offer(url=url, text=text)
+        except CaptureError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except Exception as e:
+            logger.error(f"[capture] failed for {url}: {e}")
+            raise HTTPException(status_code=502, detail=f"Capture failed: {e}")
+        if url and db.find_offer_by_url(conn, url):
+            # pasted text for a URL already captured: keep the first sheet
+            return {"offer": db.find_offer_by_url(conn, url), "duplicate": True}
+        return {"offer": db.insert_offer(conn, fields, actor="ai"), "duplicate": False}
+
+@app.get("/api/offers")
+def get_offers():
+    with closing(db.connect()) as conn:
+        return db.list_offers(conn)
+
+@app.get("/api/offers/{offer_id}")
+def get_offer(offer_id: str):
+    with closing(db.connect()) as conn:
+        offer = db.get_offer(conn, offer_id)
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    return offer

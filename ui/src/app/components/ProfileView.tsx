@@ -8,9 +8,11 @@ interface Application {
   location: string;
   salary: string;
   matchScore: number;
-  stage: 'saved' | 'applied' | 'interviewing' | 'offer' | 'rejected';
+  stage: string; // one of GET /api/statuses
   appliedDate: string;
 }
+
+const stageLabel = (s: string) => (s.charAt(0).toUpperCase() + s.slice(1)).replace('_', ' ');
 
 export function ProfileView() {
   const [loading, setLoading] = useState(false);
@@ -18,10 +20,15 @@ export function ProfileView() {
   const [activeTab, setActiveTab] = useState<'profile' | 'applications'>('profile');
 
   const [applications, setApplications] = useState<Application[]>([]);
+  const [statuses, setStatuses] = useState<string[]>([]);
 
   useEffect(() => {
     fetchProfile();
     fetchApplications();
+    fetch('http://localhost:8000/api/statuses')
+      .then((res) => res.json())
+      .then(setStatuses)
+      .catch((e) => console.error("Failed to fetch statuses", e));
   }, []);
 
   const fetchProfile = async () => {
@@ -107,7 +114,7 @@ export function ProfileView() {
               <div className="relative">
                 <input
                   type="file"
-                  accept=".pdf,.docx"
+                  accept=".pdf,.txt"
                   onChange={async (e) => {
                     if (!e.target.files) return;
                     const file = e.target.files[0];
@@ -116,12 +123,17 @@ export function ProfileView() {
 
                     setLoading(true);
                     try {
-                      await fetch("http://localhost:8000/api/upload_resume", {
+                      const res = await fetch("http://localhost:8000/api/upload_resume", {
                         method: "POST",
                         body: formData
                       });
+                      if (!res.ok) {
+                        const data = await res.json().catch(() => ({}));
+                        alert(`Upload failed: ${data.detail || res.statusText}`);
+                        return;
+                      }
                       await fetchProfile();
-                      alert("Resume parsed successfully!");
+                      alert("Resume saved and parsed!");
                     } catch (err) {
                       alert("Upload failed.");
                       console.error(err);
@@ -136,7 +148,7 @@ export function ProfileView() {
                     {loading ? <RefreshCw className="w-6 h-6 text-blue-400 animate-spin" /> : <User className="w-6 h-6 text-[#C4C4C4]" />}
                   </div>
                   <h3 className="font-medium text-white mb-1">{loading ? "Analyzing..." : "Upload Your Resume"}</h3>
-                  <p className="text-sm text-zinc-500 mb-4">PDF or DOCX format</p>
+                  <p className="text-sm text-zinc-500 mb-4">PDF or TXT format, saved in data/cvs</p>
                   <div className="flex justify-center gap-2">
                     <span className="px-3 py-1.5 bg-zinc-800 rounded-lg text-xs border border-zinc-700">CV / Resume</span>
                   </div>
@@ -439,10 +451,12 @@ export function ProfileView() {
                     <h3 className="font-semibold text-lg mb-1">{app.title}</h3>
                     <p className="text-sm text-zinc-400">{app.company}</p>
                   </div>
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-                    <TrendingUp className="w-4 h-4 text-blue-400" />
-                    <span className="text-sm font-semibold text-blue-400">{app.matchScore}%</span>
-                  </div>
+                  {app.matchScore > 0 && (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                      <TrendingUp className="w-4 h-4 text-blue-400" />
+                      <span className="text-sm font-semibold text-blue-400">{app.matchScore}%</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-3 gap-4 mb-4 text-sm">
@@ -479,18 +493,16 @@ export function ProfileView() {
                       }}
                       className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-300 outline-none focus:border-blue-500"
                     >
-                      <option value="saved">Saved</option>
-                      <option value="applied">Applied</option>
-                      <option value="interviewing">Interviewing</option>
-                      <option value="offer">Offer</option>
-                      <option value="rejected">Rejected</option>
+                      {statuses.map((s) => (
+                        <option key={s} value={s}>{stageLabel(s)}</option>
+                      ))}
                     </select>
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${app.stage === 'interviewing' ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/30' :
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${app.stage === 'interview' ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/30' :
                       app.stage === 'applied' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/30' :
                         app.stage === 'offer' ? 'bg-green-500/10 text-green-400 border border-green-500/30' :
                           'bg-zinc-800 text-zinc-400 border border-zinc-700'
                       }`}>
-                      {app.stage.charAt(0).toUpperCase() + app.stage.slice(1)}
+                      {stageLabel(app.stage)}
                     </span>
                   </div>
                   <button className="text-sm text-blue-400 hover:text-blue-300">View Details →</button>

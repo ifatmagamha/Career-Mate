@@ -1,0 +1,75 @@
+# Which model serves which role (spec v0.1, D3). This file is the only place model names live.
+# Every provider speaks the OpenAI-compatible protocol: <base_url>/chat/completions and /embeddings.
+#
+# How to switch models:
+#   - all roles at once     -> edit [defaults]
+#   - one role only         -> give that role its own provider/model
+#   - try without editing   -> env vars, e.g. LLM_DEFAULT_MODEL=openai/gpt-oss-20b:groq
+#                              or LLM_EXTRACT_PROVIDER=gemini LLM_EXTRACT_MODEL=gemini-3.5-flash
+#   Resolution order: LLM_<ROLE>_* env > [roles.<role>] > LLM_DEFAULT_* env > [defaults]
+#   A new provider only needs a [providers.<name>] block: no code change.
+
+[defaults]
+# Hugging Face router -> Groq, billed by Groq through your custom provider key (free tier)
+provider = "hf"
+model = "openai/gpt-oss-120b:groq"
+
+# --- Providers ---------------------------------------------------------------
+
+[providers.hf]
+base_url = "https://router.huggingface.co/v1"
+api_key_env = "HF_TOKEN"     # fine-grained token with "Make calls to Inference Providers"
+structured = "json_schema"   # json_schema | json_object | prompt; depends on the underlying provider
+# Free only with a custom provider key saved on huggingface.co/settings/inference-providers:
+# routed requests are otherwise billed to your HF account, and free accounts have no credits.
+# Keep the ":<provider>" suffix on model names (e.g. ":groq") or HF may route to a paid provider.
+
+[providers.gemini]
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+api_key_env = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]   # first one set wins
+structured = "json_schema"
+
+[providers.groq]   # same models, called directly; limits on console.groq.com/settings/limits; free tiers may log prompts
+base_url = "https://api.groq.com/openai/v1"
+api_key_env = "GROQ_API_KEY"
+structured = "prompt"        # gpt-oss supports json_schema, but non-strict mode returns HTTP 400 on a mismatch
+
+[providers.openrouter]   # free models end in ":free" (about 50 requests/day without credits)
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+structured = "prompt"
+
+[providers.vllm]   # your own vLLM server (in WSL2/Docker): vllm serve <model> --port 8001  (8000 is the FastAPI app)
+base_url = "http://localhost:8001/v1"
+api_key_env = ""
+structured = "json_schema"   # vLLM enforces the schema with guided decoding
+
+[providers.local]
+base_url = "http://localhost:11434/v1"   # Ollama. llama.cpp server: http://localhost:8080/v1
+api_key_env = ""
+structured = "json_schema"
+
+# --- Roles: what each part of the app needs (model comes from [defaults] unless pinned) ---
+
+[roles.extract]   # offer capture, CV parsing, offer analysis
+params = { temperature = 0.1, max_tokens = 4096 }
+
+[roles.write]     # letters, emails, CV tailoring
+params = { temperature = 0.4, max_tokens = 4096 }
+
+[roles.route]     # chat router
+params = { temperature = 0, max_tokens = 1024 }
+
+[roles.chat]      # general chat, RAG answers, stats agent
+params = { temperature = 0.3, max_tokens = 4096 }
+
+[roles.judge]     # evaluate.py
+params = { temperature = 0, max_tokens = 2048 }
+
+[roles.embed]     # pinned: no free embedding model on HF. Changing it means rebuilding every index.
+provider = "gemini"
+model = "gemini-embedding-001"
+
+# USD per 1M tokens, from the provider's pricing page. Without an entry, cost_usd is left empty.
+# Free-tier usage costs 0: [prices."openai/gpt-oss-120b:groq"] input = 0.0 output = 0.0
+[prices]

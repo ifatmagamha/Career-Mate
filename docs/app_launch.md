@@ -3,8 +3,8 @@
 ## 1. Start the Backend API (Python)
 The backend now runs as a FastAPI server separately from the UI.
 ```bash
-# In the root terminal:
-python -m uvicorn src.api.server:app --reload --port 8000
+# In the root terminal (first time: uv sync --locked):
+uv run uvicorn src.api.server:app --reload --port 8000
 ```
 
 ## 2. Start the Frontend UI (React)

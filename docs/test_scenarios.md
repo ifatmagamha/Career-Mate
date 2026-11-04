@@ -21,6 +21,6 @@ The Retrieval Augmented Generation system allows the AI to "read" your documents
 ## 3. LLMOps & Evaluation
 To run the automated audit:
 ```bash
-python evaluate.py
+uv run python evaluate.py
 ```
 This script acts as a "Unit Test for Intelligence", asking 25 questions and grading the answers (1-5) using a judge LLM.

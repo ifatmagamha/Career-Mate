@@ -6,19 +6,11 @@ from src.graph.state import RecruitAIState
 from src.graph.nodes import node_collect, node_analyze, node_match, node_write, node_track, node_report_matches
 from src.graph.router import route_request
 from src.agents.rag_agent import rag_node
-from src.agents.stats_agent import stats_node
 
 def node_chat(state: RecruitAIState):
     """Conversational fallback using the LLM."""
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    from src.config.settings import settings
-    
-    chat_llm = ChatGoogleGenerativeAI(
-        model=settings.GEMINI_MODEL,
-        google_api_key=settings.GEMINI_API_KEY,
-        temperature=0.4
-    )
-    
+    from src.llm.port import llm
+
     messages = state.get("messages", [])
     if not messages:
         return {"messages": [AIMessage(content="Hello! How can I help you today?")]}
@@ -38,8 +30,8 @@ def node_chat(state: RecruitAIState):
     Keep it brief.
     """
     
-    res = chat_llm.invoke(prompt)
-    return {"messages": [res], "active_node": "chat"}
+    res = llm.complete(prompt, role="chat", temperature=0.4)
+    return {"messages": [AIMessage(content=res)], "active_node": "chat"}
 
 def build_recruit_graph():
     g = StateGraph(RecruitAIState)
@@ -55,7 +47,6 @@ def build_recruit_graph():
     
     # New Agents
     g.add_node("rag", rag_node)
-    g.add_node("stats", stats_node)
     g.add_node("chat", node_chat)
 
     # Entry Point
@@ -68,7 +59,6 @@ def build_recruit_graph():
         {
             "job_pipeline": "collect",
             "rag_agent": "rag",
-            "stats_agent": "stats",
             "general_chat": "chat"
         }
     )
@@ -85,7 +75,6 @@ def build_recruit_graph():
     
     # Agent Flows
     g.add_edge("rag", END)
-    g.add_edge("stats", END)
     g.add_edge("chat", END)
 
     return g.compile()
