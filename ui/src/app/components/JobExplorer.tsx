@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { API } from '@/app/api';
+import { API, apiFetch } from '@/app/api';
 import {
   Link2, MapPin, Briefcase, Calendar, Sparkles, Loader, ClipboardPaste, Plus, FolderPlus,
   Folder as FolderIcon, Inbox, Layers, Trash2, StickyNote, Users, Pencil, Search, LayoutGrid, X,
@@ -170,7 +170,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
     setAsking(true);
     setError('');
     try {
-      const res = await fetch(`${API}/api/offers/interpret`, {
+      const res = await apiFetch(`${API}/api/offers/interpret`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -207,7 +207,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
       (Array.isArray(v) ? v : [v]).forEach((x) => params.append(k, String(x)));
     }
     try {
-      const res = await fetch(`${API}/api/offers?${params}`);
+      const res = await apiFetch(`${API}/api/offers?${params}`);
       const data = await res.json();
       if (id === requestId.current) { // ignore out-of-order answers
         setJobs(data.map(toJob));
@@ -221,9 +221,9 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
   const fetchSidebar = async () => {
     try {
       const [f, fc, v] = await Promise.all([
-        fetch(`${API}/api/folders`).then((r) => r.json()),
-        fetch(`${API}/api/offer-facets`).then((r) => r.json()),
-        fetch(`${API}/api/views`).then((r) => r.json()),
+        apiFetch(`${API}/api/folders`).then((r) => r.json()),
+        apiFetch(`${API}/api/offer-facets`).then((r) => r.json()),
+        apiFetch(`${API}/api/views`).then((r) => r.json()),
       ]);
       setFolders(f);
       setFacets(fc);
@@ -243,7 +243,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
 
   useEffect(() => {
     fetchSidebar();
-    fetch(`${API}/api/offer-options`).then((r) => r.json()).then(setOptions).catch(() => {});
+    apiFetch(`${API}/api/offer-options`).then((r) => r.json()).then(setOptions).catch(() => {});
   }, []);
 
   const capture = async () => {
@@ -253,7 +253,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
     setError('');
 
     try {
-      const res = await fetch(`${API}/api/offers/capture`, {
+      const res = await apiFetch(`${API}/api/offers/capture`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url.trim() || null, text: text || null }),
@@ -283,7 +283,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
   };
 
   const patchApplication = async (applicationId: string, body: object) => {
-    const res = await fetch(`${API}/api/applications/${applicationId}`, {
+    const res = await apiFetch(`${API}/api/applications/${applicationId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -319,7 +319,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
   const createFolder = async () => {
     const name = newFolder.trim();
     if (!name) return;
-    const res = await fetch(`${API}/api/folders`, {
+    const res = await apiFetch(`${API}/api/folders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -337,7 +337,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
 
   const renameFolder = async () => {
     if (!renaming) return;
-    const res = await fetch(`${API}/api/folders/${renaming.id}`, {
+    const res = await apiFetch(`${API}/api/folders/${renaming.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: renaming.name }),
@@ -354,7 +354,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
 
   const deleteFolder = async (folder: Folder) => {
     if (!window.confirm(`Delete the folder "${folder.name}"? Its ${folder.count} offer(s) become unfiled; nothing else is deleted.`)) return;
-    await fetch(`${API}/api/folders/${folder.id}`, { method: 'DELETE' });
+    await apiFetch(`${API}/api/folders/${folder.id}`, { method: 'DELETE' });
     if (scope === folder.id) setScope('all');
     await refresh();
   };
@@ -370,7 +370,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
   const saveView = async (asNew: boolean) => {
     const name = asNew ? (savingView || '').trim() : activeView?.name;
     if (!name) return;
-    const res = await fetch(asNew ? `${API}/api/views` : `${API}/api/views/${activeView!.id}`, {
+    const res = await apiFetch(asNew ? `${API}/api/views` : `${API}/api/views/${activeView!.id}`, {
       method: asNew ? 'POST' : 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, filters: toApiFilters(filters, scope), layout }),
@@ -388,7 +388,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
 
   const deleteView = async (v: SavedView) => {
     if (!window.confirm(`Delete the view "${v.name}"? Offers are not affected.`)) return;
-    await fetch(`${API}/api/views/${v.id}`, { method: 'DELETE' });
+    await apiFetch(`${API}/api/views/${v.id}`, { method: 'DELETE' });
     if (activeView?.id === v.id) setActiveView(null);
     fetchSidebar();
   };

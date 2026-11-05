@@ -2,14 +2,13 @@
 Measure the natural-language query interpreter on labeled requests (role "query" in config/models.toml).
 
   uv run python scripts/measure_query.py
-Uses a throwaway database (your data is not touched); one model call per request.
+Uses a throwaway Postgres schema (your data is not touched); one model call per request.
 Re-run after changing the query model or the interpreter prompt.
 """
 import sys
-import tempfile
+import uuid
 import time
 from datetime import date
-from pathlib import Path
 
 sys.path.insert(0, ".")
 from src.agents.query_interpreter import interpret  # noqa: E402
@@ -32,13 +31,13 @@ CASES = [
     ("CDD ou stage en marketing", {"contract_type": {"fixed_term", "internship"}}, ["marketing"], ["cdd", "stage"]),
 ]
 
-with tempfile.TemporaryDirectory() as d:
-    conn = db.connect(Path(d) / "q.db")
-    folder_id = db.create_folder(conn, "Data roles")["id"]
+U = str(uuid.uuid4())
+with db.temp_schema() as conn:
+    folder_id = db.create_folder(conn, U, "Data roles")["id"]
     exact, tp, fp, fn, q_ok, latencies = 0, 0, 0, 0, 0, []
     for text, expected, must, must_not in CASES:
         t0 = time.monotonic()
-        plan = interpret(conn, text, today=TODAY)
+        plan = interpret(conn, U, text, today=TODAY)
         latencies.append(time.monotonic() - t0)
         got = {k: v[0] for k, v in plan["filters"].items()}
         if plan["folder_id"]:
@@ -57,7 +56,6 @@ with tempfile.TemporaryDirectory() as d:
         ok = right == set(expected) and len(got) == len(expected) and q_good
         exact += ok
         print(f"{'OK ' if ok else 'ERR'} {text!r:<70} -> q={plan['q']!r} {got}")
-    conn.close()
 
 n = len(CASES)
 print(f"\nfully correct {exact}/{n} | filters precision {tp / max(tp + fp, 1):.2f} recall {tp / max(tp + fn, 1):.2f}"

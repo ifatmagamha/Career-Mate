@@ -14,7 +14,7 @@ import os
 import re
 import time
 import tomllib
-from contextlib import closing
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
@@ -23,11 +23,20 @@ import requests
 from pydantic import BaseModel, ValidationError
 
 from src.config.logging import logger
-from src.storage import db
 
 T = TypeVar("T", bound=BaseModel)
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "models.toml"
+
+# Who the current request is for (set by the API's auth dependency), so llm_calls rows carry the user
+current_user: ContextVar[Optional[str]] = ContextVar("current_user", default=None)
+
+
+def _db_log(call: Dict[str, Any]) -> None:
+    from src.storage import db
+    call = {**call, "user_id": current_user.get(), "offer_id": db._id(call.get("offer_id"))}
+    with db.connection() as conn:
+        db.log_llm_call(conn, call)
 MAX_ATTEMPTS = 3
 BACKOFF_S = (2, 6)
 MAX_RETRY_AFTER_S = 60  # never wait longer than this on a provider's Retry-After
@@ -119,10 +128,10 @@ def _content_text(message: Dict[str, Any]) -> str:
 
 
 class LLMPort:
-    def __init__(self, post: Callable[..., requests.Response] = requests.post, db_path: Path | None = None,
-                 config_path: Path = CONFIG_PATH):
+    def __init__(self, post: Callable[..., requests.Response] = requests.post,
+                 log: Callable[[Dict[str, Any]], None] = _db_log, config_path: Path = CONFIG_PATH):
         self._post = post
-        self._db_path = db_path or db.DB_PATH
+        self._log_call = log
         self._config_path = config_path
 
     def config(self, role: str) -> RoleConfig:
@@ -228,17 +237,16 @@ class LLMPort:
             message = data["choices"][0]["message"]
             response = _content_text(message) or (json.dumps(message["tool_calls"]) if message.get("tool_calls") else "")
         try:
-            with closing(db.connect(self._db_path)) as conn:
-                db.log_llm_call(conn, {
-                    "role": cfg.role, "provider": cfg.provider, "model": cfg.model,
-                    "prompt_version": prompt_version, "offer_id": offer_id,
-                    "status": "ok" if data is not None else "error", "http_status": status,
-                    "input_tokens": tin, "output_tokens": tout, "latency_ms": int(elapsed_s * 1000),
-                    "cost_usd": cost, "error": err,
-                    # embeddings: log the input size, not the vectors
-                    "request": json.dumps(body.get("messages") or {"inputs": len(body.get("input", []))}, ensure_ascii=False),
-                    "response": response,
-                })
+            self._log_call({
+                "role": cfg.role, "provider": cfg.provider, "model": cfg.model,
+                "prompt_version": prompt_version, "offer_id": offer_id,
+                "status": "ok" if data is not None else "error", "http_status": status,
+                "input_tokens": tin, "output_tokens": tout, "latency_ms": int(elapsed_s * 1000),
+                "cost_usd": cost, "error": err,
+                # embeddings: log the input size, not the vectors
+                "request": json.dumps(body.get("messages") or {"inputs": len(body.get("input", []))}, ensure_ascii=False),
+                "response": response,
+            })
         except Exception as e:  # logging must never break a call
             logger.warning(f"[llm] could not log call: {e}")
 
@@ -267,7 +275,7 @@ if __name__ == "__main__":
         skills: List[str]
 
     with tempfile.TemporaryDirectory() as d:
-        dbp = Path(d) / "t.db"
+        logged: List[Dict[str, Any]] = []
         cfg_path = Path(d) / "models.toml"
         cfg_path.write_text(
             '[providers.p]\nbase_url = "http://x/v1"\napi_key_env = ""\nstructured = "json_schema"\n'
@@ -278,13 +286,12 @@ if __name__ == "__main__":
         BACKOFF_S = (0, 0)
 
         def calls():
-            with closing(db.connect(dbp)) as c:
-                return c.execute("SELECT * FROM llm_calls ORDER BY id").fetchall()
+            return logged
 
         # 1. structured with json_schema, valid on first try; cost from prices
         sent: List[Dict[str, Any]] = []
         port = LLMPort(post=lambda url, json, **kw: (sent.append(json), chat('{"title":"DE","skills":["SQL"]}'))[1],
-                       db_path=dbp, config_path=cfg_path)
+                       log=logged.append, config_path=cfg_path)
         s = port.structured("x", Sheet, role="extract", prompt_version="v1", offer_id="o1")
         assert s.title == "DE" and sent[0]["response_format"]["type"] == "json_schema" and sent[0]["temperature"] == 0.1
         row = calls()[-1]
@@ -294,13 +301,13 @@ if __name__ == "__main__":
         # 2. prompt mode: schema goes in the prompt; invalid JSON then one successful repair
         answers = iter(["not json", '```json\n{"title":"X","skills":[]}\n```'])
         sent.clear()
-        port = LLMPort(post=lambda url, json, **kw: (sent.append(json), chat(next(answers)))[1], db_path=dbp, config_path=cfg_path)
+        port = LLMPort(post=lambda url, json, **kw: (sent.append(json), chat(next(answers)))[1], log=logged.append, config_path=cfg_path)
         assert port.structured("x", Sheet, role="write").title == "X"
         assert "response_format" not in sent[0] and "JSON schema" in sent[0]["messages"][-1]["content"]
         assert sent[1]["messages"][-2] == {"role": "assistant", "content": "not json"}
 
         # 3. two bad answers -> StructuredOutputError
-        port = LLMPort(post=lambda *a, **kw: chat("nope"), db_path=dbp, config_path=cfg_path)
+        port = LLMPort(post=lambda *a, **kw: chat("nope"), log=logged.append, config_path=cfg_path)
         try:
             port.structured("x", Sheet, role="extract")
             raise AssertionError("expected StructuredOutputError")
@@ -310,7 +317,7 @@ if __name__ == "__main__":
         # 4. 503 then OK: retried, both attempts logged
         seq = iter([FakeResp(503, {"error": "busy"}), chat("hi")])
         n = len(calls())
-        port = LLMPort(post=lambda *a, **kw: next(seq), db_path=dbp, config_path=cfg_path)
+        port = LLMPort(post=lambda *a, **kw: next(seq), log=logged.append, config_path=cfg_path)
         assert port.complete("x", role="extract") == "hi"
         assert [r["status"] for r in calls()[n:]] == ["error", "ok"]
 
@@ -318,14 +325,14 @@ if __name__ == "__main__":
         slept = []
         _real_sleep, time.sleep = time.sleep, slept.append
         seq = iter([FakeResp(429, {"error": "tokens per minute"}, {"retry-after": "2.5"}), chat("hi")])
-        port = LLMPort(post=lambda *a, **kw: next(seq), db_path=dbp, config_path=cfg_path)
+        port = LLMPort(post=lambda *a, **kw: next(seq), log=logged.append, config_path=cfg_path)
         assert port.complete("x", role="extract") == "hi" and slept == [3.0], slept
         time.sleep = _real_sleep
 
         # 5. daily quota: no retry
         tries = []
         port = LLMPort(post=lambda *a, **kw: (tries.append(1), FakeResp(429, {"error": "GenerateRequestsPerDayPerProjectPerModel"}))[1],
-                       db_path=dbp, config_path=cfg_path)
+                       log=logged.append, config_path=cfg_path)
         try:
             port.complete("x", role="extract")
             raise AssertionError("expected QuotaExhausted")
@@ -335,7 +342,7 @@ if __name__ == "__main__":
         # 6. env override + content blocks
         os.environ["LLM_EXTRACT_MODEL"] = "m9"
         port = LLMPort(post=lambda url, json, **kw: FakeResp(200, {"choices": [{"message": {"content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}}]}),
-                       db_path=dbp, config_path=cfg_path)
+                       log=logged.append, config_path=cfg_path)
         assert port.config("extract").model == "m9" and port.complete("x", role="extract") == "ab"
         del os.environ["LLM_EXTRACT_MODEL"]
 
@@ -355,7 +362,7 @@ if __name__ == "__main__":
         sent.clear()
         call = {"id": "c1", "type": "function", "function": {"name": "python", "arguments": '{"code": "1+1"}'}}
         port = LLMPort(post=lambda url, json, **kw: (sent.append(json), FakeResp(200, {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [call]}}]}))[1],
-                       db_path=dbp, config_path=cfg_path)
+                       log=logged.append, config_path=cfg_path)
         os.environ["PORT_TEST_A"] = "ka"
         msg = port.respond("x", role="extract", tools=[{"type": "function", "function": {"name": "python"}}])
         del os.environ["PORT_TEST_A"]
@@ -370,7 +377,7 @@ if __name__ == "__main__":
             '[providers.q]\nbase_url = "http://y/v1"\napi_key_env = ""\n'
             '[roles.chat]\nparams = { temperature = 0.3 }\n'
             '[roles.embed]\nprovider = "q"\nmodel = "em"\n', encoding="utf-8")
-        p8 = LLMPort(config_path=d_path, db_path=dbp)
+        p8 = LLMPort(config_path=d_path, log=logged.append)
         assert (p8.config("chat").provider, p8.config("chat").model, p8.config("chat").params) == ("p", "dm", {"temperature": 0.3})
         assert (p8.config("embed").provider, p8.config("embed").model) == ("q", "em")
         os.environ["LLM_DEFAULT_MODEL"] = "env-dm"  # env default beats [defaults], not a pinned role

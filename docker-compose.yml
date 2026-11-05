@@ -1,0 +1,36 @@
+# Local stack: PostgreSQL with pgvector (same extension Supabase provides) + the API container.
+#   docker compose up -d db          database only (run the API with uv for hot reload)
+#   docker compose up --build        database + API in a container, like production
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: career
+      POSTGRES_PASSWORD: career  # local only
+      POSTGRES_DB: career
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U career -d career"]
+      interval: 3s
+      retries: 20
+
+  api:
+    build: .
+    env_file:
+      - path: .env  # model keys, SUPABASE_URL...
+        required: false
+    environment:
+      DATABASE_URL: postgresql://career:career@db:5432/career
+      APP_ENV: ${APP_ENV:-development}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

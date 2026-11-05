@@ -1,196 +1,166 @@
+"""PostgreSQL storage. Every function takes the logged-in user's id and only ever touches that user's rows."""
 from __future__ import annotations
 
-import json
+import atexit
 import re
-import sqlite3
+import threading
 import uuid
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
+
+import psycopg
+from psycopg import sql
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from src.config.settings import settings
 
-DB_PATH = Path(settings.DATA_DIR) / "career_mate.db"
+MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+IntegrityError = psycopg.IntegrityError  # duplicate names etc.; the API turns it into 409
 
 # One status list for code, API and UI (spec v0.1, D2)
 STATUSES = ("saved", "to_apply", "applied", "interview", "offer", "accepted", "rejected", "archived")
 ACTORS = ("user", "ai", "automation")
 LAYOUTS = ("grid", "table", "board")
 
-# List fields are stored as JSON text.
 _JSON_FIELDS = ("skills", "nice_to_have", "missions", "requirements")
-
 _OFFER_FIELDS = (
     "url", "title", "company", "location", "remote_policy", "contract_type", "seniority",
     "salary", "deadline", "summary", "raw_text", "source", "model", "prompt_version", "match_score",
 )
-
-SCHEMA = """
--- What the employer published (re-extractable, never edited by tracking)
-CREATE TABLE IF NOT EXISTS offers (
-    id             TEXT PRIMARY KEY,
-    url            TEXT UNIQUE,
-    title          TEXT NOT NULL,
-    company        TEXT,
-    location       TEXT,
-    remote_policy  TEXT,
-    contract_type  TEXT,
-    seniority      TEXT,
-    salary         TEXT,
-    deadline       TEXT,
-    skills         TEXT DEFAULT '[]',
-    nice_to_have   TEXT DEFAULT '[]',
-    missions       TEXT DEFAULT '[]',
-    requirements   TEXT DEFAULT '[]',
-    summary        TEXT,
-    raw_text       TEXT,
-    source         TEXT,
-    model          TEXT,
-    prompt_version TEXT,
-    match_score    INTEGER,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
-);
-
--- What I do with it (1:1 with offers)
-CREATE TABLE IF NOT EXISTS applications (
-    id             TEXT PRIMARY KEY,
-    offer_id       TEXT NOT NULL UNIQUE REFERENCES offers(id),
-    status         TEXT NOT NULL DEFAULT 'saved',
-    next_action    TEXT,
-    next_action_at TEXT,
-    applied_at     TEXT,
-    channel        TEXT,
-    contact        TEXT,
-    folder_id      TEXT REFERENCES folders(id),
-    notes          TEXT,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
-);
-
--- My own directories (an offer sits in at most one; none = unfiled)
-CREATE TABLE IF NOT EXISTS folders (
-    id         TEXT PRIMARY KEY,
-    name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    created_at TEXT NOT NULL
-);
-
--- People to reach for an application (third-party personal data: stays in this local file)
-CREATE TABLE IF NOT EXISTS contacts (
-    id             TEXT PRIMARY KEY,
-    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-    name           TEXT NOT NULL,
-    role           TEXT,
-    linkedin_url   TEXT,
-    notes          TEXT,
-    reached_out    INTEGER NOT NULL DEFAULT 0,
-    reached_at     TEXT,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
-);
-
--- Saved views: a named filter + sort + layout
-CREATE TABLE IF NOT EXISTS views (
-    id         TEXT PRIMARY KEY,
-    name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    filters    TEXT NOT NULL DEFAULT '{}',
-    layout     TEXT NOT NULL DEFAULT 'grid',
-    created_at TEXT NOT NULL
-);
-
--- Full-text index over offers (BM25 ranking), kept in sync by triggers
-CREATE VIRTUAL TABLE IF NOT EXISTS offers_fts USING fts5(
-    title, company, location, summary, skills, nice_to_have, raw_text,
-    content='offers', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2'
-);
-
-CREATE TRIGGER IF NOT EXISTS offers_fts_ai AFTER INSERT ON offers BEGIN
-    INSERT INTO offers_fts(rowid, title, company, location, summary, skills, nice_to_have, raw_text)
-    VALUES (new.rowid, new.title, new.company, new.location, new.summary, new.skills, new.nice_to_have, new.raw_text);
-END;
-
-CREATE TRIGGER IF NOT EXISTS offers_fts_ad AFTER DELETE ON offers BEGIN
-    INSERT INTO offers_fts(offers_fts, rowid, title, company, location, summary, skills, nice_to_have, raw_text)
-    VALUES ('delete', old.rowid, old.title, old.company, old.location, old.summary, old.skills, old.nice_to_have, old.raw_text);
-END;
-
-CREATE TRIGGER IF NOT EXISTS offers_fts_au AFTER UPDATE ON offers BEGIN
-    INSERT INTO offers_fts(offers_fts, rowid, title, company, location, summary, skills, nice_to_have, raw_text)
-    VALUES ('delete', old.rowid, old.title, old.company, old.location, old.summary, old.skills, old.nice_to_have, old.raw_text);
-    INSERT INTO offers_fts(rowid, title, company, location, summary, skills, nice_to_have, raw_text)
-    VALUES (new.rowid, new.title, new.company, new.location, new.summary, new.skills, new.nice_to_have, new.raw_text);
-END;
-
--- Dense vectors for semantic search (derived data: rebuilt when the text or the embedding model changes)
-CREATE TABLE IF NOT EXISTS offer_embeddings (
-    offer_id   TEXT PRIMARY KEY REFERENCES offers(id) ON DELETE CASCADE,
-    model      TEXT NOT NULL,
-    text_hash  TEXT NOT NULL,
-    dim        INTEGER NOT NULL,
-    vector     BLOB NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS events (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    offer_id       TEXT REFERENCES offers(id),
-    application_id TEXT REFERENCES applications(id),
-    actor          TEXT NOT NULL,
-    type           TEXT NOT NULL,
-    payload        TEXT DEFAULT '{}',
-    created_at     TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS llm_calls (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at     TEXT NOT NULL,
-    role           TEXT NOT NULL,
-    provider       TEXT NOT NULL,
-    model          TEXT NOT NULL,
-    prompt_version TEXT,
-    offer_id       TEXT,
-    status         TEXT NOT NULL,
-    http_status    INTEGER,
-    input_tokens   INTEGER,
-    output_tokens  INTEGER,
-    latency_ms     INTEGER,
-    cost_usd       REAL,
-    error          TEXT,
-    request        TEXT,
-    response       TEXT
-);
-"""
+_CONTACT_FIELDS = ("name", "role", "linkedin_url", "notes")
 
 _VIEW = """
-SELECT o.*, a.id AS application_id, a.status, a.next_action, a.next_action_at, a.applied_at,
-       a.folder_id, a.notes,
-       (SELECT COUNT(*) FROM contacts c WHERE c.application_id = a.id) AS contacts_count
+SELECT o.id, o.url, o.title, o.company, o.location, o.remote_policy, o.contract_type, o.seniority, o.salary,
+       o.deadline, o.skills, o.nice_to_have, o.missions, o.requirements, o.summary, o.raw_text, o.source,
+       o.model, o.prompt_version, o.match_score, o.created_at, o.updated_at,
+       a.id AS application_id, a.status, a.next_action, a.next_action_at, a.applied_at, a.folder_id, a.notes,
+       (SELECT count(*) FROM contacts c WHERE c.application_id = a.id) AS contacts_count
 FROM offers o JOIN applications a ON a.offer_id = o.id
 """
 
-_CONTACT_FIELDS = ("name", "role", "linkedin_url", "notes")
+
+# --- connections -------------------------------------------------------------------------------------
+
+def _plain(v: Any) -> Any:
+    """DB values -> JSON-friendly values (the API and the UI work with strings)."""
+    if isinstance(v, uuid.UUID):
+        return str(v)
+    if isinstance(v, (datetime, date)):
+        return v.isoformat()
+    if isinstance(v, Decimal):
+        return float(v)
+    return v
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def _row_factory(cursor):
+    make = dict_row(cursor)
+    return lambda values: {k: _plain(v) for k, v in make(values).items()}
 
 
-def connect(path: Path = DB_PATH) -> sqlite3.Connection:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(SCHEMA)
-    # Databases created before folders/notes existed: add the columns in place
-    for column, decl in (("folder_id", "TEXT REFERENCES folders(id)"), ("notes", "TEXT")):
-        if column not in {r["name"] for r in conn.execute("PRAGMA table_info(applications)")}:
-            conn.execute(f"ALTER TABLE applications ADD COLUMN {column} {decl}")
-    # Schema v2: the full-text index appeared; index offers that existed before it
-    if conn.execute("PRAGMA user_version").fetchone()[0] < 2:
-        with conn:
-            conn.execute("INSERT INTO offers_fts(offers_fts) VALUES ('rebuild')")
-            conn.execute("PRAGMA user_version = 2")
+def _set_search_path(conn: psycopg.Connection, schema: str) -> None:
+    conn.execute(sql.SQL("SET search_path TO {}, public, extensions").format(sql.Identifier(schema)))
+    conn.commit()
+
+
+def connect(url: str | None = None, schema: str | None = None) -> psycopg.Connection:
+    """One standalone connection (CLI, scripts, self-checks). The API uses the pool instead."""
+    url = url or settings.DATABASE_URL
+    if not url:
+        raise RuntimeError("DATABASE_URL is not set (see .env.example)")
+    # prepare_threshold=None: no server-side prepared statements, so connection poolers work
+    conn = psycopg.connect(url, row_factory=_row_factory, prepare_threshold=None)
+    _set_search_path(conn, schema or settings.DB_SCHEMA)
     return conn
 
+
+_pool = None
+_pool_lock = threading.Lock()  # the first requests arrive together, in different threads: create one pool only
+
+
+def pool():
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            from psycopg_pool import ConnectionPool
+            if not settings.DATABASE_URL:
+                raise RuntimeError("DATABASE_URL is not set (see .env.example)")
+            _pool = ConnectionPool(
+                settings.DATABASE_URL, min_size=1, max_size=5, open=True,
+                kwargs={"row_factory": _row_factory, "prepare_threshold": None},
+                configure=lambda c: _set_search_path(c, settings.DB_SCHEMA),
+            )
+            atexit.register(close_pool)  # CLI/scripts: close before Python shuts its threads down
+    return _pool
+
+
+def close_pool() -> None:
+    """On shutdown: close connections cleanly (the container stops gracefully)."""
+    global _pool
+    if _pool is not None:
+        _pool.close()
+        _pool = None
+
+
+@contextmanager
+def connection() -> Iterator[psycopg.Connection]:
+    """Borrow a pooled connection for one request; committed on success, rolled back on error."""
+    with pool().connection() as conn:
+        yield conn
+
+
+def migrate(conn: psycopg.Connection, schema: str | None = None) -> List[str]:
+    """Apply the SQL files in migrations/ that this schema has not run yet, in name order."""
+    schema = schema or settings.DB_SCHEMA
+    applied_now = []
+    with conn.transaction():
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (schema,))  # two containers starting at once
+        conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
+        conn.execute(sql.SQL("SET LOCAL search_path TO {}, public, extensions").format(sql.Identifier(schema)))
+        conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations "
+                     "(name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+        done = {r["name"] for r in conn.execute("SELECT name FROM schema_migrations")}
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            if path.name not in done:
+                conn.execute(path.read_text(encoding="utf-8"))
+                conn.execute("INSERT INTO schema_migrations (name) VALUES (%s)", (path.name,))
+                applied_now.append(path.name)
+    _set_search_path(conn, schema)
+    return applied_now
+
+
+@contextmanager
+def temp_schema(url: str | None = None) -> Iterator[psycopg.Connection]:
+    """A throwaway, migrated schema for tests and measurements; dropped afterwards."""
+    schema = f"test_{uuid.uuid4().hex[:12]}"
+    conn = connect(url, schema)
+    try:
+        migrate(conn, schema)
+        yield conn
+    finally:
+        conn.rollback()
+        conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+        conn.commit()
+        conn.close()
+
+
+def _id(value: Any) -> Optional[str]:
+    """A well-formed uuid string, or None (so a bad id from a URL is 'not found', not a DB error)."""
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError):
+        return None
+
+
+def _date(value: Any) -> Optional[str]:
+    v = str(value or "").strip()[:10]
+    return v if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) else None
+
+
+# --- offers & applications -----------------------------------------------------------------------------
 
 # Common spellings -> one canonical name, so filters and counts group the same skill together.
 # ponytail: small hand-made alias list; grow it from the facet list when duplicates show up.
@@ -220,80 +190,80 @@ def normalize_skills(skills: Any) -> List[str]:
     return out
 
 
-def _row_to_offer(row: sqlite3.Row) -> Dict[str, Any]:
-    offer = dict(row)
-    for f in _JSON_FIELDS:
-        offer[f] = json.loads(offer[f] or "[]")
-    return offer
-
-
-def log_event(conn: sqlite3.Connection, type_: str, *, actor: str, offer_id: Optional[str] = None,
+def log_event(conn, user_id: str, type_: str, *, actor: str, offer_id: Optional[str] = None,
               application_id: Optional[str] = None, payload: Dict[str, Any] | None = None) -> None:
     if actor not in ACTORS:
         raise ValueError(f"Unknown actor: {actor}")
     conn.execute(
-        "INSERT INTO events (offer_id, application_id, actor, type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (offer_id, application_id, actor, type_, json.dumps(payload or {}, ensure_ascii=False), _now()),
+        "INSERT INTO events (user_id, offer_id, application_id, actor, type, payload) VALUES (%s, %s, %s, %s, %s, %s)",
+        (user_id, offer_id, application_id, actor, type_, Jsonb(payload or {})),
     )
 
 
-def insert_offer(conn: sqlite3.Connection, data: Dict[str, Any], *, status: str = "saved", actor: str = "user") -> Dict[str, Any]:
+def insert_offer(conn, user_id: str, data: Dict[str, Any], *, status: str = "saved", actor: str = "user") -> Dict[str, Any]:
     """Create the offer and its application in one transaction."""
     if status not in STATUSES:
         raise ValueError(f"Unknown status: {status}")
-    now = _now()
     data = {**data, "skills": normalize_skills(data.get("skills")), "nice_to_have": normalize_skills(data.get("nice_to_have"))}
     row = {k: data.get(k) for k in _OFFER_FIELDS}
-    row.update({f: json.dumps(data.get(f) or [], ensure_ascii=False) for f in _JSON_FIELDS})
-    row.update(id=data.get("id") or str(uuid.uuid4()), created_at=now, updated_at=now)
-    app_id = str(uuid.uuid4())
+    row["deadline"] = _date(row["deadline"])
+    row.update({f: Jsonb(data.get(f) or []) for f in _JSON_FIELDS})
+    row.update(id=_id(data.get("id")) or str(uuid.uuid4()), user_id=user_id)
+    if data.get("created_at"):  # imports keep their original dates
+        row.update(created_at=data["created_at"], updated_at=data.get("updated_at") or data["created_at"])
 
-    with conn:
-        conn.execute(f"INSERT INTO offers ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})", list(row.values()))
-        conn.execute(
-            "INSERT INTO applications (id, offer_id, status, applied_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (app_id, row["id"], status, now if status == "applied" else None, now, now),
-        )
-        log_event(conn, "offer.created", actor=actor, offer_id=row["id"], application_id=app_id,
+    with conn.transaction():
+        conn.execute(sql.SQL("INSERT INTO offers ({}) VALUES ({})").format(
+            sql.SQL(", ").join(map(sql.Identifier, row)), sql.SQL(", ").join(sql.Placeholder() * len(row))),
+            list(row.values()))
+        app_id = conn.execute(
+            "INSERT INTO applications (user_id, offer_id, status, applied_at) "
+            "VALUES (%s, %s, %s, CASE WHEN %s THEN now() END) RETURNING id",
+            (user_id, row["id"], status, status == "applied"),
+        ).fetchone()["id"]
+        log_event(conn, user_id, "offer.created", actor=actor, offer_id=row["id"], application_id=app_id,
                   payload={"source": row["source"], "status": status})
-    return get_offer(conn, row["id"])
+    return get_offer(conn, user_id, row["id"])
 
 
-def get_offer(conn: sqlite3.Connection, offer_id: str) -> Optional[Dict[str, Any]]:
-    row = conn.execute(_VIEW + " WHERE o.id = ?", (offer_id,)).fetchone()
-    return _row_to_offer(row) if row else None
+def _one(conn, where: str, params: tuple) -> Optional[Dict[str, Any]]:
+    return conn.execute(_VIEW + " WHERE o.user_id = %s AND " + where, params).fetchone()
 
 
-def get_offer_by_application(conn: sqlite3.Connection, application_id: str) -> Optional[Dict[str, Any]]:
-    row = conn.execute(_VIEW + " WHERE a.id = ?", (application_id,)).fetchone()
-    return _row_to_offer(row) if row else None
+def get_offer(conn, user_id: str, offer_id: str) -> Optional[Dict[str, Any]]:
+    oid = _id(offer_id)
+    return _one(conn, "o.id = %s", (user_id, oid)) if oid else None
 
 
-def find_offer_by_url(conn: sqlite3.Connection, url: str) -> Optional[Dict[str, Any]]:
-    row = conn.execute(_VIEW + " WHERE o.url = ?", (url,)).fetchone()
-    return _row_to_offer(row) if row else None
+def get_offer_by_application(conn, user_id: str, application_id: str) -> Optional[Dict[str, Any]]:
+    aid = _id(application_id)
+    return _one(conn, "a.id = %s", (user_id, aid)) if aid else None
 
 
-def list_offers(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
-    return [_row_to_offer(r) for r in conn.execute(_VIEW + " ORDER BY o.created_at DESC").fetchall()]
+def find_offer_by_url(conn, user_id: str, url: str) -> Optional[Dict[str, Any]]:
+    return _one(conn, "o.url = %s", (user_id, url))
 
 
-def update_status(conn: sqlite3.Connection, application_id: str, status: str, *, actor: str = "user") -> Optional[Dict[str, Any]]:
+def list_offers(conn, user_id: str) -> List[Dict[str, Any]]:
+    return conn.execute(_VIEW + " WHERE o.user_id = %s ORDER BY o.created_at DESC", (user_id,)).fetchall()
+
+
+def update_status(conn, user_id: str, application_id: str, status: str, *, actor: str = "user") -> Optional[Dict[str, Any]]:
     if status not in STATUSES:
         raise ValueError(f"Unknown status: {status}")
-    offer = get_offer_by_application(conn, application_id)
+    offer = get_offer_by_application(conn, user_id, application_id)
     if not offer:
         return None
     if offer["status"] != status:
-        now = _now()
-        with conn:
+        with conn.transaction():
             conn.execute(
-                "UPDATE applications SET status = ?, updated_at = ?, applied_at = COALESCE(applied_at, ?) WHERE id = ?",
-                (status, now, now if status == "applied" else None, application_id),
+                "UPDATE applications SET status = %s, updated_at = now(), "
+                "applied_at = COALESCE(applied_at, CASE WHEN %s THEN now() END) WHERE id = %s AND user_id = %s",
+                (status, status == "applied", offer["application_id"], user_id),
             )
-            log_event(conn, "application.status_changed", actor=actor, offer_id=offer["id"],
-                      application_id=application_id, payload={"from": offer["status"], "to": status})
-    return get_offer_by_application(conn, application_id)
+            log_event(conn, user_id, "application.status_changed", actor=actor, offer_id=offer["id"],
+                      application_id=offer["application_id"], payload={"from": offer["status"], "to": status})
+    return get_offer_by_application(conn, user_id, application_id)
 
 
 # Fields you can correct on an offer card (provenance fields like model/source stay as captured)
@@ -301,26 +271,31 @@ EDITABLE_OFFER_FIELDS = ("url", "title", "company", "location", "remote_policy",
                          "salary", "deadline", "summary", "raw_text") + _JSON_FIELDS
 
 
-def update_offer(conn: sqlite3.Connection, offer_id: str, changes: Dict[str, Any], *, actor: str = "user") -> Optional[Dict[str, Any]]:
+def update_offer(conn, user_id: str, offer_id: str, changes: Dict[str, Any], *, actor: str = "user") -> Optional[Dict[str, Any]]:
     """Apply edits to the posting fields; the event records which fields changed (your edits win over AI values)."""
-    offer = get_offer(conn, offer_id)
+    offer = get_offer(conn, user_id, offer_id)
     if not offer:
         return None
     changes = {k: v for k, v in changes.items() if k in EDITABLE_OFFER_FIELDS}
     for f in ("skills", "nice_to_have"):
         if f in changes:
             changes[f] = normalize_skills(changes[f])
+    if "deadline" in changes:
+        changes["deadline"] = _date(changes["deadline"])
     changed = [k for k, v in changes.items() if offer.get(k) != v]
     if not changed:
         return offer
-    values = {k: json.dumps(changes[k] or [], ensure_ascii=False) if k in _JSON_FIELDS else changes[k] for k in changed}
-    values["updated_at"] = _now()
-    with conn:
-        conn.execute(f"UPDATE offers SET {', '.join(f'{k} = ?' for k in values)} WHERE id = ?", [*values.values(), offer_id])
-        log_event(conn, "offer.edited", actor=actor, offer_id=offer_id, application_id=offer["application_id"],
-                  payload={"fields": changed})
-    return get_offer(conn, offer_id)
+    values = {k: Jsonb(changes[k] or []) if k in _JSON_FIELDS else changes[k] for k in changed}
+    with conn.transaction():
+        conn.execute(sql.SQL("UPDATE offers SET {}, updated_at = now() WHERE id = %s AND user_id = %s").format(
+            sql.SQL(", ").join(sql.SQL("{} = %s").format(sql.Identifier(k)) for k in values)),
+            [*values.values(), offer["id"], user_id])
+        log_event(conn, user_id, "offer.edited", actor=actor, offer_id=offer["id"],
+                  application_id=offer["application_id"], payload={"fields": changed})
+    return get_offer(conn, user_id, offer_id)
 
+
+# --- search, filters, sort -------------------------------------------------------------------------------
 
 def _enum_values(name: str) -> tuple:
     from typing import get_args
@@ -338,309 +313,345 @@ ENUM_FILTERS = {
 
 SORTS = {
     "recent": "o.created_at DESC",
-    "deadline": "o.deadline IS NULL, o.deadline ASC",
-    "title": "o.title COLLATE NOCASE",
-    "company": "o.company IS NULL, o.company COLLATE NOCASE",
-    "updated": "MAX(o.updated_at, a.updated_at) DESC",
-    "relevance": "bm25(offers_fts)",  # only with a search query
+    "deadline": "o.deadline ASC NULLS LAST",
+    "title": "lower(o.title)",
+    "company": "lower(o.company) NULLS LAST",
+    "updated": "GREATEST(o.updated_at, a.updated_at) DESC",
+    "relevance": "ts_rank_cd(o.search, to_tsquery('simple', f_unaccent(%(q)s))) DESC",  # only with a search query
 }
 
 
 def _fts_query(q: str) -> str:
-    """User text -> safe FTS5 query: every word must match, as a prefix ('pyth' finds 'python')."""
-    words = re.findall(r"\w+", q, flags=re.UNICODE)
-    return " ".join(f'"{w}"*' for w in words)
+    """User text -> safe tsquery text: every word must match, as a prefix ('pyth' finds 'python')."""
+    words = re.findall(r"[^\W_]+", q, flags=re.UNICODE)
+    return " & ".join(f"{w}:*" for w in words)
 
 
-def query_offers(conn: sqlite3.Connection, f: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
-    """Search + filters + sort over offers. Lists are OR within a filter, AND across filters."""
+def query_offers(conn, user_id: str, f: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
+    """Search + filters + sort over one user's offers. Lists are OR within a filter, AND across filters."""
     f = f or {}
-    joins, where, params = "", [], []
+    where, params = ["o.user_id = %(uid)s"], {"uid": user_id}
     fts = _fts_query(f.get("q") or "")
     if fts:
-        joins = "JOIN offers_fts ON offers_fts.rowid = o.rowid"
-        where.append("offers_fts MATCH ?")
-        params.append(fts)
+        where.append("o.search @@ to_tsquery('simple', f_unaccent(%(q)s))")
+        params["q"] = fts
     for key, (column, _) in ENUM_FILTERS.items():
         values = [v for v in (f.get(key) or []) if v]
         if values:
-            where.append(f"{column} IN ({', '.join('?' for _ in values)})")
-            params += values
+            where.append(f"{column} = ANY(%({key})s)")
+            params[key] = values
     folder = f.get("folder")
     if folder == "unfiled":
         where.append("a.folder_id IS NULL")
     elif folder:
-        where.append("a.folder_id = ?")
-        params.append(folder)
+        where.append("a.folder_id = %(folder)s")
+        params["folder"] = _id(folder)
     if f.get("deadline_before"):
-        where.append("o.deadline IS NOT NULL AND o.deadline <= ?")
-        params.append(f["deadline_before"])
+        where.append("o.deadline <= %(deadline_before)s")
+        params["deadline_before"] = _date(f["deadline_before"])
     sort = f.get("sort") or ("relevance" if fts else "recent")
     if sort not in SORTS or (sort == "relevance" and not fts):
         sort = "recent"
-    sql = _VIEW.replace("FROM offers o JOIN", f"FROM offers o {joins} JOIN") \
-        + (" WHERE " + " AND ".join(where) if where else "") + f" ORDER BY {SORTS[sort]}"
-    return [_row_to_offer(r) for r in conn.execute(sql, params).fetchall()]
+    return conn.execute(_VIEW + " WHERE " + " AND ".join(where) + f" ORDER BY {SORTS[sort]}, o.id", params).fetchall()
 
 
-def offer_facets(conn: sqlite3.Connection) -> Dict[str, Any]:
-    """Totals for the sidebar and the skills present in your offers (for the skill filter)."""
-    total, unfiled = conn.execute(
-        "SELECT COUNT(*), SUM(folder_id IS NULL) FROM applications").fetchone()
-    skills = conn.execute(
-        "SELECT value AS name, COUNT(*) AS count FROM offers o, json_each(o.skills) "
-        "GROUP BY value COLLATE NOCASE ORDER BY count DESC, name COLLATE NOCASE").fetchall()
-    return {"total": total, "unfiled": unfiled or 0, "skills": [dict(s) for s in skills]}
+def offer_facets(conn, user_id: str) -> Dict[str, Any]:
+    """Totals for the sidebar."""
+    return conn.execute(
+        "SELECT count(*) AS total, count(*) FILTER (WHERE folder_id IS NULL) AS unfiled "
+        "FROM applications WHERE user_id = %s", (user_id,)).fetchone()
 
 
-def list_views(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
-    rows = conn.execute("SELECT * FROM views ORDER BY name COLLATE NOCASE").fetchall()
-    return [{**dict(r), "filters": json.loads(r["filters"])} for r in rows]
+# --- views, folders, notes -------------------------------------------------------------------------------
+
+def list_views(conn, user_id: str) -> List[Dict[str, Any]]:
+    return conn.execute("SELECT * FROM views WHERE user_id = %s ORDER BY lower(name)", (user_id,)).fetchall()
 
 
-def save_view(conn: sqlite3.Connection, name: str, filters: Dict[str, Any], layout: str, view_id: Optional[str] = None) -> Dict[str, Any]:
-    """Create (no id) or update a view. Raises sqlite3.IntegrityError on a duplicate name."""
+def save_view(conn, user_id: str, name: str, filters: Dict[str, Any], layout: str, view_id: Optional[str] = None) -> Dict[str, Any]:
+    """Create (no id) or update a view. Raises IntegrityError on a duplicate name, KeyError on an unknown id."""
     if not name.strip():
         raise ValueError("View name is empty")
     if layout not in LAYOUTS:
         raise ValueError(f"Unknown layout: {layout}")
-    row = {"id": view_id or str(uuid.uuid4()), "name": name.strip(), "filters": json.dumps(filters, ensure_ascii=False),
-           "layout": layout, "created_at": _now()}
-    with conn:
+    with conn.transaction():
         if view_id:
-            cur = conn.execute("UPDATE views SET name = ?, filters = ?, layout = ? WHERE id = ?",
-                               (row["name"], row["filters"], layout, view_id))
-            if not cur.rowcount:
+            row = conn.execute("UPDATE views SET name = %s, filters = %s, layout = %s WHERE id = %s AND user_id = %s "
+                               "RETURNING *", (name.strip(), Jsonb(filters), layout, _id(view_id), user_id)).fetchone()
+            if not row:
                 raise KeyError(view_id)
-        else:
-            conn.execute("INSERT INTO views (id, name, filters, layout, created_at) VALUES (?, ?, ?, ?, ?)", tuple(row.values()))
-    r = conn.execute("SELECT * FROM views WHERE id = ?", (row["id"],)).fetchone()
-    return {**dict(r), "filters": json.loads(r["filters"])}
+            return row
+        return conn.execute("INSERT INTO views (user_id, name, filters, layout) VALUES (%s, %s, %s, %s) RETURNING *",
+                            (user_id, name.strip(), Jsonb(filters), layout)).fetchone()
 
 
-def delete_view(conn: sqlite3.Connection, view_id: str) -> bool:
-    with conn:
-        return conn.execute("DELETE FROM views WHERE id = ?", (view_id,)).rowcount > 0
+def delete_view(conn, user_id: str, view_id: str) -> bool:
+    with conn.transaction():
+        return conn.execute("DELETE FROM views WHERE id = %s AND user_id = %s", (_id(view_id), user_id)).rowcount > 0
 
 
-def set_folder(conn: sqlite3.Connection, application_id: str, folder_id: Optional[str], *, actor: str = "user") -> Optional[Dict[str, Any]]:
-    """Move an application into a folder (None = unfiled)."""
-    offer = get_offer_by_application(conn, application_id)
+def set_folder(conn, user_id: str, application_id: str, folder_id: Optional[str], *, actor: str = "user") -> Optional[Dict[str, Any]]:
+    """Move an application into one of the user's folders (None = unfiled)."""
+    offer = get_offer_by_application(conn, user_id, application_id)
     if not offer:
         return None
-    if folder_id and not conn.execute("SELECT 1 FROM folders WHERE id = ?", (folder_id,)).fetchone():
+    if folder_id and not conn.execute("SELECT 1 FROM folders WHERE id = %s AND user_id = %s",
+                                      (_id(folder_id), user_id)).fetchone():
         raise ValueError(f"Unknown folder: {folder_id}")
     if offer["folder_id"] != folder_id:
-        with conn:
-            conn.execute("UPDATE applications SET folder_id = ?, updated_at = ? WHERE id = ?", (folder_id, _now(), application_id))
-            log_event(conn, "application.moved", actor=actor, offer_id=offer["id"], application_id=application_id,
-                      payload={"from": offer["folder_id"], "to": folder_id})
-    return get_offer_by_application(conn, application_id)
+        with conn.transaction():
+            conn.execute("UPDATE applications SET folder_id = %s, updated_at = now() WHERE id = %s AND user_id = %s",
+                         (folder_id, offer["application_id"], user_id))
+            log_event(conn, user_id, "application.moved", actor=actor, offer_id=offer["id"],
+                      application_id=offer["application_id"], payload={"from": offer["folder_id"], "to": folder_id})
+    return get_offer_by_application(conn, user_id, application_id)
 
 
-def set_notes(conn: sqlite3.Connection, application_id: str, notes: str) -> Optional[Dict[str, Any]]:
-    with conn:
-        cur = conn.execute("UPDATE applications SET notes = ?, updated_at = ? WHERE id = ?", (notes, _now(), application_id))
-    return get_offer_by_application(conn, application_id) if cur.rowcount else None
+def set_notes(conn, user_id: str, application_id: str, notes: str) -> Optional[Dict[str, Any]]:
+    with conn.transaction():
+        n = conn.execute("UPDATE applications SET notes = %s, updated_at = now() WHERE id = %s AND user_id = %s",
+                         (notes, _id(application_id), user_id)).rowcount
+    return get_offer_by_application(conn, user_id, application_id) if n else None
 
 
-def list_folders(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
-    rows = conn.execute(
-        "SELECT f.id, f.name, f.created_at, COUNT(a.id) AS count FROM folders f "
-        "LEFT JOIN applications a ON a.folder_id = f.id GROUP BY f.id ORDER BY f.name COLLATE NOCASE"
-    ).fetchall()
-    return [dict(r) for r in rows]
+def list_folders(conn, user_id: str) -> List[Dict[str, Any]]:
+    return conn.execute(
+        "SELECT f.id, f.name, f.created_at, count(a.id) AS count FROM folders f "
+        "LEFT JOIN applications a ON a.folder_id = f.id WHERE f.user_id = %s "
+        "GROUP BY f.id ORDER BY lower(f.name)", (user_id,)).fetchall()
 
 
-def create_folder(conn: sqlite3.Connection, name: str) -> Dict[str, Any]:
-    """Raises sqlite3.IntegrityError if the name exists (case-insensitive)."""
-    folder = {"id": str(uuid.uuid4()), "name": name.strip(), "created_at": _now()}
-    if not folder["name"]:
-        raise ValueError("Folder name is empty")
-    with conn:
-        conn.execute("INSERT INTO folders (id, name, created_at) VALUES (?, ?, ?)", tuple(folder.values()))
-    return {**folder, "count": 0}
-
-
-def rename_folder(conn: sqlite3.Connection, folder_id: str, name: str) -> bool:
+def create_folder(conn, user_id: str, name: str) -> Dict[str, Any]:
+    """Raises IntegrityError if the user already has that name (case-insensitive)."""
     if not name.strip():
         raise ValueError("Folder name is empty")
-    with conn:
-        return conn.execute("UPDATE folders SET name = ? WHERE id = ?", (name.strip(), folder_id)).rowcount > 0
+    with conn.transaction():
+        row = conn.execute("INSERT INTO folders (user_id, name) VALUES (%s, %s) RETURNING id, name, created_at",
+                           (user_id, name.strip())).fetchone()
+    return {**row, "count": 0}
 
 
-def delete_folder(conn: sqlite3.Connection, folder_id: str) -> bool:
-    """Its offers become unfiled; nothing else is deleted."""
-    with conn:
-        conn.execute("UPDATE applications SET folder_id = NULL WHERE folder_id = ?", (folder_id,))
-        return conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,)).rowcount > 0
+def rename_folder(conn, user_id: str, folder_id: str, name: str) -> bool:
+    if not name.strip():
+        raise ValueError("Folder name is empty")
+    with conn.transaction():
+        return conn.execute("UPDATE folders SET name = %s WHERE id = %s AND user_id = %s",
+                            (name.strip(), _id(folder_id), user_id)).rowcount > 0
 
 
-def _contact(row: sqlite3.Row) -> Dict[str, Any]:
-    return {**dict(row), "reached_out": bool(row["reached_out"])}
+def delete_folder(conn, user_id: str, folder_id: str) -> bool:
+    """Its offers become unfiled (ON DELETE SET NULL); nothing else is deleted."""
+    with conn.transaction():
+        return conn.execute("DELETE FROM folders WHERE id = %s AND user_id = %s", (_id(folder_id), user_id)).rowcount > 0
 
 
-def list_contacts(conn: sqlite3.Connection, application_id: str) -> List[Dict[str, Any]]:
-    rows = conn.execute("SELECT * FROM contacts WHERE application_id = ? ORDER BY created_at", (application_id,)).fetchall()
-    return [_contact(r) for r in rows]
+# --- contacts -------------------------------------------------------------------------------------------
+
+def list_contacts(conn, user_id: str, application_id: str) -> List[Dict[str, Any]]:
+    return conn.execute("SELECT * FROM contacts WHERE application_id = %s AND user_id = %s ORDER BY created_at",
+                        (_id(application_id), user_id)).fetchall()
 
 
-def add_contact(conn: sqlite3.Connection, application_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    offer = get_offer_by_application(conn, application_id)
+def add_contact(conn, user_id: str, application_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    offer = get_offer_by_application(conn, user_id, application_id)
     if not offer:
         return None
-    now = _now()
-    row = {k: data.get(k) for k in _CONTACT_FIELDS}
-    row.update(id=str(uuid.uuid4()), application_id=application_id, reached_out=int(bool(data.get("reached_out"))),
-               reached_at=now if data.get("reached_out") else None, created_at=now, updated_at=now)
-    with conn:
-        conn.execute(f"INSERT INTO contacts ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})", list(row.values()))
-        log_event(conn, "contact.added", actor="user", offer_id=offer["id"], application_id=application_id,
-                  payload={"contact_id": row["id"], "role": row["role"]})
-    return _contact(conn.execute("SELECT * FROM contacts WHERE id = ?", (row["id"],)).fetchone())
+    reached = bool(data.get("reached_out"))
+    with conn.transaction():
+        row = conn.execute(
+            "INSERT INTO contacts (user_id, application_id, name, role, linkedin_url, notes, reached_out, reached_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END) RETURNING *",
+            (user_id, offer["application_id"], *(data.get(k) for k in _CONTACT_FIELDS), reached, reached)).fetchone()
+        log_event(conn, user_id, "contact.added", actor="user", offer_id=offer["id"],
+                  application_id=offer["application_id"], payload={"contact_id": row["id"], "role": row["role"]})
+    return row
 
 
-def update_contact(conn: sqlite3.Connection, contact_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    current = conn.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,)).fetchone()
+def update_contact(conn, user_id: str, contact_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    cid = _id(contact_id)
+    current = conn.execute("SELECT * FROM contacts WHERE id = %s AND user_id = %s", (cid, user_id)).fetchone() if cid else None
     if not current:
         return None
     changes = {k: data[k] for k in _CONTACT_FIELDS if k in data}
-    if "reached_out" in data and bool(data["reached_out"]) != bool(current["reached_out"]):
-        changes["reached_out"] = int(bool(data["reached_out"]))
-        changes["reached_at"] = _now() if data["reached_out"] else None
+    if "reached_out" in data and bool(data["reached_out"]) != current["reached_out"]:
+        changes["reached_out"] = bool(data["reached_out"])
+        changes["reached_at"] = datetime.now(timezone.utc) if changes["reached_out"] else None
     if not changes:
-        return _contact(current)
-    changes["updated_at"] = _now()
-    with conn:
-        conn.execute(f"UPDATE contacts SET {', '.join(f'{k} = ?' for k in changes)} WHERE id = ?", [*changes.values(), contact_id])
+        return current
+    with conn.transaction():
+        row = conn.execute(sql.SQL(
+            "UPDATE contacts SET {}, updated_at = now() WHERE id = %s AND user_id = %s RETURNING *").format(
+            sql.SQL(", ").join(sql.SQL("{} = %s").format(sql.Identifier(k)) for k in changes)),
+            [*changes.values(), cid, user_id]).fetchone()
         if "reached_out" in changes:
-            log_event(conn, "contact.reached_out" if changes["reached_out"] else "contact.unmarked", actor="user",
-                      application_id=current["application_id"], payload={"contact_id": contact_id})
-    return _contact(conn.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,)).fetchone())
+            log_event(conn, user_id, "contact.reached_out" if changes["reached_out"] else "contact.unmarked",
+                      actor="user", application_id=current["application_id"], payload={"contact_id": cid})
+    return row
 
 
-def delete_contact(conn: sqlite3.Connection, contact_id: str) -> bool:
-    with conn:
-        return conn.execute("DELETE FROM contacts WHERE id = ?", (contact_id,)).rowcount > 0
+def delete_contact(conn, user_id: str, contact_id: str) -> bool:
+    with conn.transaction():
+        return conn.execute("DELETE FROM contacts WHERE id = %s AND user_id = %s", (_id(contact_id), user_id)).rowcount > 0
 
 
-def log_llm_call(conn: sqlite3.Connection, call: Dict[str, Any]) -> None:
-    call = {**call, "created_at": _now()}
-    with conn:
-        conn.execute(f"INSERT INTO llm_calls ({', '.join(call)}) VALUES ({', '.join('?' for _ in call)})", list(call.values()))
+# --- profile (parsed CV + the file itself) -----------------------------------------------------------------
+
+def get_profile(conn, user_id: str) -> Optional[Dict[str, Any]]:
+    return conn.execute("SELECT profile, source_file, cv_mime, updated_at FROM profiles WHERE user_id = %s",
+                        (user_id,)).fetchone()
+
+
+def get_cv_file(conn, user_id: str) -> Optional[Dict[str, Any]]:
+    return conn.execute("SELECT source_file, cv_file, cv_mime FROM profiles WHERE user_id = %s AND cv_file IS NOT NULL",
+                        (user_id,)).fetchone()
+
+
+def save_profile(conn, user_id: str, profile: Dict[str, Any], *, source_file: Optional[str] = None,
+                 cv_file: Optional[bytes] = None, cv_mime: Optional[str] = None) -> None:
+    """Upsert. Without a new file, the stored CV file is kept."""
+    with conn.transaction():
+        conn.execute(
+            "INSERT INTO profiles (user_id, profile, source_file, cv_file, cv_mime) VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (user_id) DO UPDATE SET profile = EXCLUDED.profile, updated_at = now(), "
+            "source_file = COALESCE(EXCLUDED.source_file, profiles.source_file), "
+            "cv_file = COALESCE(EXCLUDED.cv_file, profiles.cv_file), cv_mime = COALESCE(EXCLUDED.cv_mime, profiles.cv_mime)",
+            (user_id, Jsonb(profile), source_file, cv_file, cv_mime))
+
+
+def log_llm_call(conn, call: Dict[str, Any]) -> None:
+    with conn.transaction():
+        conn.execute(sql.SQL("INSERT INTO llm_calls ({}) VALUES ({})").format(
+            sql.SQL(", ").join(map(sql.Identifier, call)), sql.SQL(", ").join(sql.Placeholder() * len(call))),
+            list(call.values()))
 
 
 if __name__ == "__main__":
-    import tempfile
+    # Needs a reachable Postgres (DATABASE_URL); works in a throwaway schema that is dropped afterwards.
+    U, V = str(uuid.uuid4()), str(uuid.uuid4())  # two users
 
-    with tempfile.TemporaryDirectory() as d:
-        c = connect(Path(d) / "t.db")
-        o = insert_offer(c, {"url": "https://x/1", "title": "Data Eng", "skills": ["SQL"], "source": "test"}, actor="ai")
+    def raises(exc, fn):
+        try:
+            fn()
+        except exc:
+            return True
+        raise AssertionError(f"expected {exc.__name__}")
+
+    with temp_schema() as c:
+        assert migrate(c, c.execute("SELECT current_schema() AS s").fetchone()["s"]) == []  # idempotent
+
+        o = insert_offer(c, U, {"url": "https://x/1", "title": "Data Eng", "skills": ["SQL"], "source": "test"}, actor="ai")
         assert o["skills"] == ["SQL"] and o["status"] == "saved" and o["application_id"], o
-        assert find_offer_by_url(c, "https://x/1")["id"] == o["id"]
+        assert find_offer_by_url(c, U, "https://x/1")["id"] == o["id"]
 
-        a = update_status(c, o["application_id"], "applied")
+        a = update_status(c, U, o["application_id"], "applied")
         assert a["status"] == "applied" and a["applied_at"], a
-        update_status(c, o["application_id"], "applied")  # no-op: same status, no event
-        update_status(c, o["application_id"], "interview")
-        assert get_offer(c, o["id"])["applied_at"] == a["applied_at"]  # first applied date kept
+        update_status(c, U, o["application_id"], "applied")  # no-op: same status, no event
+        update_status(c, U, o["application_id"], "interview")
+        assert get_offer(c, U, o["id"])["applied_at"] == a["applied_at"]  # first applied date kept
+        assert get_offer(c, U, "not-a-uuid") is None
 
-        for bad in (lambda: update_status(c, o["application_id"], "interviewing"),
-                    lambda: insert_offer(c, {"title": "x"}, status="nope"),
-                    lambda: log_event(c, "x", actor="robot")):
-            try:
-                bad()
-                raise AssertionError("expected ValueError")
-            except ValueError:
-                pass
+        raises(ValueError, lambda: update_status(c, U, o["application_id"], "interviewing"))
+        raises(ValueError, lambda: insert_offer(c, U, {"title": "x"}, status="nope"))
+        raises(ValueError, lambda: log_event(c, U, "x", actor="robot"))
 
         rows = [(r["type"], r["actor"]) for r in c.execute("SELECT type, actor FROM events ORDER BY id")]
         assert rows == [("offer.created", "ai"), ("application.status_changed", "user"),
                         ("application.status_changed", "user")], rows
 
-        log_llm_call(c, {"role": "extract", "provider": "p", "model": "m", "status": "ok", "input_tokens": 3})
-        assert c.execute("SELECT input_tokens FROM llm_calls").fetchone()[0] == 3
+        log_llm_call(c, {"user_id": U, "role": "extract", "provider": "p", "model": "m", "status": "ok", "input_tokens": 3})
+        assert c.execute("SELECT input_tokens FROM llm_calls").fetchone()["input_tokens"] == 3
 
         # folders: create, unique name, move, delete -> unfiled
         app_id = o["application_id"]
-        f = create_folder(c, " Data roles ")
+        f = create_folder(c, U, " Data roles ")
         assert f["name"] == "Data roles"
-        try:
-            create_folder(c, "data ROLES")
-            raise AssertionError("expected IntegrityError")
-        except sqlite3.IntegrityError:
-            pass
-        assert set_folder(c, app_id, f["id"])["folder_id"] == f["id"]
-        assert list_folders(c)[0]["count"] == 1
-        try:
-            set_folder(c, app_id, "nope")
-            raise AssertionError("expected ValueError")
-        except ValueError:
-            pass
-        assert rename_folder(c, f["id"], "Data")
-        assert delete_folder(c, f["id"]) and get_offer(c, o["id"])["folder_id"] is None
+        raises(IntegrityError, lambda: create_folder(c, U, "data ROLES"))
+        assert set_folder(c, U, app_id, f["id"])["folder_id"] == f["id"]
+        assert list_folders(c, U)[0]["count"] == 1
+        raises(ValueError, lambda: set_folder(c, U, app_id, str(uuid.uuid4())))
+        assert rename_folder(c, U, f["id"], "Data")
+        assert delete_folder(c, U, f["id"]) and get_offer(c, U, o["id"])["folder_id"] is None
 
         # notes + contacts
-        assert set_notes(c, app_id, "Ask about remote")["notes"] == "Ask about remote"
-        k = add_contact(c, app_id, {"name": "Sam", "role": "Recruiter", "linkedin_url": "https://linkedin.com/in/sam"})
-        assert k["reached_out"] is False and get_offer(c, o["id"])["contacts_count"] == 1
-        k2 = update_contact(c, k["id"], {"reached_out": True})
+        assert set_notes(c, U, app_id, "Ask about remote")["notes"] == "Ask about remote"
+        k = add_contact(c, U, app_id, {"name": "Sam", "role": "Recruiter", "linkedin_url": "https://linkedin.com/in/sam"})
+        assert k["reached_out"] is False and get_offer(c, U, o["id"])["contacts_count"] == 1
+        k2 = update_contact(c, U, k["id"], {"reached_out": True})
         assert k2["reached_out"] and k2["reached_at"]
-        assert update_contact(c, k["id"], {"reached_out": False})["reached_at"] is None
+        assert update_contact(c, U, k["id"], {"reached_out": False})["reached_at"] is None
         types = [r["type"] for r in c.execute("SELECT type FROM events ORDER BY id")]
         assert types[-4:] == ["application.moved", "contact.added", "contact.reached_out", "contact.unmarked"], types
-        assert delete_contact(c, k["id"]) and list_contacts(c, app_id) == []
-        c.close()
+        assert delete_contact(c, U, k["id"]) and list_contacts(c, U, app_id) == []
 
-        # --- edits, normalization, search, filters, views ---
-        s = connect(Path(d) / "search.db")
-        a1 = insert_offer(s, {"title": "Data Engineer", "company": "Doctolib", "location": "Paris",
-                              "skills": ["python", "Postgres", "Python", " dbt "], "contract_type": "permanent",
-                              "remote_policy": "hybrid", "deadline": "2026-12-01", "raw_text": "Pipelines de données en temps réel"})
-        assert a1["skills"] == ["Python", "PostgreSQL", "dbt"], a1["skills"]
-        a2 = insert_offer(s, {"title": "ML Intern", "company": "Alan", "location": "Lyon", "skills": ["PyTorch"],
-                              "nice_to_have": ["SQL"], "contract_type": "internship", "deadline": "2026-11-20"})
-        insert_offer(s, {"title": "Sales Exec", "company": "Qonto", "skills": ["CRM"]}, status="applied")
+        # --- isolation: user V sees and changes nothing of user U ---
+        assert get_offer(c, V, o["id"]) is None and find_offer_by_url(c, V, "https://x/1") is None
+        assert list_offers(c, V) == [] and query_offers(c, V) == [] and offer_facets(c, V)["total"] == 0
+        assert update_status(c, V, app_id, "rejected") is None and set_notes(c, V, app_id, "x") is None
+        assert update_offer(c, V, o["id"], {"title": "hijack"}) is None and add_contact(c, V, app_id, {"name": "x"}) is None
+        fu = create_folder(c, U, "Mine")
+        assert not rename_folder(c, V, fu["id"], "x") and not delete_folder(c, V, fu["id"]) and list_folders(c, V) == []
+        create_folder(c, V, "Mine")  # same name is fine for another user
+        vo = insert_offer(c, V, {"url": "https://x/1", "title": "Same URL, other user"})  # url unique per user only
+        raises(ValueError, lambda: set_folder(c, V, vo["application_id"], fu["id"]))  # not V's folder
+        assert get_offer(c, U, o["id"])["status"] == "interview"
 
-        assert [o["title"] for o in query_offers(s, {"q": "pyth"})] == ["Data Engineer"]       # prefix match on skills
-        assert [o["title"] for o in query_offers(s, {"q": "donnees"})] == ["Data Engineer"]    # accents ignored
-        assert query_offers(s, {"q": 'C++ "OR'}) == []                                         # odd input is safe
-        assert [o["title"] for o in query_offers(s, {"status": ["applied"]})] == ["Sales Exec"]
-        assert [o["title"] for o in query_offers(s, {"sort": "deadline"})][:2] == ["ML Intern", "Data Engineer"]
-        assert [o["title"] for o in query_offers(s, {"deadline_before": "2026-11-30"})] == ["ML Intern"]
-        fo = create_folder(s, "Data")
-        set_folder(s, a1["application_id"], fo["id"])
-        assert [o["title"] for o in query_offers(s, {"folder": fo["id"]})] == ["Data Engineer"]
-        assert len(query_offers(s, {"folder": "unfiled"})) == 2
+        # profile
+        save_profile(c, U, {"full_name": "A"}, source_file="cv.pdf", cv_file=b"%PDF", cv_mime="application/pdf")
+        save_profile(c, U, {"full_name": "B"})  # file kept
+        assert get_profile(c, U)["profile"] == {"full_name": "B"} and get_cv_file(c, U)["cv_file"] == b"%PDF"
+        assert get_profile(c, V) is None
 
-        e = update_offer(s, a2["id"], {"title": "ML Engineer Intern", "skills": ["pytorch", "k8s"], "model": "hack"})
+    # --- edits, normalization, search, filters, views ---
+    with temp_schema() as s:
+        a1 = insert_offer(s, U, {"title": "Data Engineer", "company": "Doctolib", "location": "Paris",
+                                 "skills": ["python", "Postgres", "Python", " dbt "], "contract_type": "permanent",
+                                 "remote_policy": "hybrid", "deadline": "2026-12-01", "raw_text": "Pipelines de données en temps réel"})
+        assert a1["skills"] == ["Python", "PostgreSQL", "dbt"] and a1["deadline"] == "2026-12-01", a1
+        a2 = insert_offer(s, U, {"title": "ML Intern", "company": "Alan", "location": "Lyon", "skills": ["PyTorch"],
+                                 "nice_to_have": ["SQL"], "contract_type": "internship", "deadline": "2026-11-20"})
+        insert_offer(s, U, {"title": "Sales Exec", "company": "Qonto", "skills": ["CRM"], "deadline": "soon"}, status="applied")
+
+        assert [o["title"] for o in query_offers(s, U, {"q": "pyth"})] == ["Data Engineer"]       # prefix match on skills
+        assert [o["title"] for o in query_offers(s, U, {"q": "donnees"})] == ["Data Engineer"]    # accents ignored
+        assert [o["title"] for o in query_offers(s, U, {"q": "DONNÉES"})] == ["Data Engineer"]
+        assert query_offers(s, U, {"q": 'C++ "OR & | ! :*'}) == []                                # odd input is safe
+        assert len(query_offers(s, U, {"q": "&|!"})) == 3                                         # no words = no search
+        assert [o["title"] for o in query_offers(s, U, {"status": ["applied"]})] == ["Sales Exec"]
+        assert [o["title"] for o in query_offers(s, U, {"sort": "deadline"})] == ["ML Intern", "Data Engineer", "Sales Exec"]
+        assert [o["title"] for o in query_offers(s, U, {"deadline_before": "2026-11-30"})] == ["ML Intern"]
+        assert [o["title"] for o in query_offers(s, U, {"q": "intern doctolib"})] == []           # AND across words
+        fo = create_folder(s, U, "Data")
+        set_folder(s, U, a1["application_id"], fo["id"])
+        assert [o["title"] for o in query_offers(s, U, {"folder": fo["id"]})] == ["Data Engineer"]
+        assert len(query_offers(s, U, {"folder": "unfiled"})) == 2
+        assert query_offers(s, U, {"folder": "garbage"}) == []
+
+        e = update_offer(s, U, a2["id"], {"title": "ML Engineer Intern", "skills": ["pytorch", "k8s"], "model": "hack"})
         assert e["title"] == "ML Engineer Intern" and e["skills"] == ["pytorch", "Kubernetes"] and e["model"] is None
-        assert [o["title"] for o in query_offers(s, {"q": "engineer intern"})] == ["ML Engineer Intern"]  # index follows edits
+        assert [o["title"] for o in query_offers(s, U, {"q": "engineer intern"})] == ["ML Engineer Intern"]  # index follows edits
+        # title (weight A) outranks raw text (weight D)
+        insert_offer(s, U, {"title": "Analyst", "raw_text": "you will work with a data engineer"})
+        ranked = [o["title"] for o in query_offers(s, U, {"q": "engineer"})]
+        assert len(ranked) == 3 and ranked[-1] == "Analyst", ranked
         ev = s.execute("SELECT payload FROM events WHERE type = 'offer.edited'").fetchone()["payload"]
-        assert json.loads(ev)["fields"] == ["title", "skills"], ev
-        assert update_offer(s, a2["id"], {"title": "ML Engineer Intern"})["title"] == "ML Engineer Intern"  # no-op
+        assert ev["fields"] == ["title", "skills"], ev
+        assert update_offer(s, U, a2["id"], {"title": "ML Engineer Intern"})["title"] == "ML Engineer Intern"  # no-op
 
-        facets = offer_facets(s)
-        assert facets["total"] == 3 and facets["unfiled"] == 2 and {"name": "Python", "count": 1} in facets["skills"]
+        facets = offer_facets(s, U)
+        assert facets == {"total": 4, "unfiled": 3}, facets
 
-        v = save_view(s, "Paris data", {"q": "data", "status": ["saved"]}, "table")
-        assert list_views(s)[0]["filters"] == {"q": "data", "status": ["saved"]}
-        assert save_view(s, "Paris data 2", {}, "board", view_id=v["id"])["layout"] == "board"
-        for bad in (lambda: save_view(s, "x", {}, "kanban"), lambda: save_view(s, " ", {}, "grid")):
-            try:
-                bad()
-                raise AssertionError("expected ValueError")
-            except ValueError:
-                pass
-        assert delete_view(s, v["id"]) and list_views(s) == []
-        s.close()
+        v = save_view(s, U, "Paris data", {"q": "data", "status": ["saved"]}, "table")
+        assert list_views(s, U)[0]["filters"] == {"q": "data", "status": ["saved"]}
+        assert save_view(s, U, "Paris data 2", {}, "board", view_id=v["id"])["layout"] == "board"
+        raises(KeyError, lambda: save_view(s, V, "x", {}, "grid", view_id=v["id"]))  # other user's view
+        raises(ValueError, lambda: save_view(s, U, "x", {}, "kanban"))
+        raises(ValueError, lambda: save_view(s, U, " ", {}, "grid"))
+        assert not delete_view(s, V, v["id"])
+        assert delete_view(s, U, v["id"]) and list_views(s, U) == []
 
-        # a database created before folders/notes existed is migrated in place
-        old = sqlite3.connect(Path(d) / "old.db")
-        old.executescript("CREATE TABLE applications (id TEXT PRIMARY KEY, offer_id TEXT NOT NULL UNIQUE, "
-                          "status TEXT NOT NULL DEFAULT 'saved', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);")
-        old.close()
-        m = connect(Path(d) / "old.db")
-        assert {"folder_id", "notes"} <= {r["name"] for r in m.execute("PRAGMA table_info(applications)")}
-        m.close()
+    # concurrent first requests share one pool
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(8) as ex:
+        assert len({id(p) for p in ex.map(lambda _: pool(), range(8))}) == 1
+    close_pool()
     print("db ok")

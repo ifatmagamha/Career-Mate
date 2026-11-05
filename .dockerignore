@@ -1,0 +1,16 @@
+# Only pyproject.toml, uv.lock, config/ and src/ are copied; keep everything else (and every secret) out of the build context
+.env
+.env.*
+.git
+.venv
+**/__pycache__
+.ruff_cache
+.claude
+data
+docs
+specs
+evals
+ui
+scripts
+*.md
+resume.txt

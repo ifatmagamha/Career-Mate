@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { API } from '@/app/api';
+import { API, apiFetch } from '@/app/api';
 import { User, Briefcase, MapPin, Mail, FileText, CheckCircle2, RefreshCw, TrendingUp, Clock } from 'lucide-react';
 
 interface Application {
@@ -26,7 +26,7 @@ export function ProfileView() {
   useEffect(() => {
     fetchProfile();
     fetchApplications();
-    fetch(`${API}/api/statuses`)
+    apiFetch(`${API}/api/statuses`)
       .then((res) => res.json())
       .then(setStatuses)
       .catch((e) => console.error("Failed to fetch statuses", e));
@@ -34,7 +34,7 @@ export function ProfileView() {
 
   const fetchProfile = async () => {
     try {
-      const res = await fetch(`${API}/api/profile/current`);
+      const res = await apiFetch(`${API}/api/profile/current`);
       const data = await res.json();
       setActiveProfile(data);
     } catch (e) {
@@ -44,7 +44,7 @@ export function ProfileView() {
 
   const fetchApplications = async () => {
     try {
-      const res = await fetch(`${API}/api/applications`);
+      const res = await apiFetch(`${API}/api/applications`);
       const data = await res.json();
       setApplications(data);
     } catch (e) {
@@ -124,7 +124,7 @@ export function ProfileView() {
 
                     setLoading(true);
                     try {
-                      const res = await fetch(`${API}/api/upload_resume`, {
+                      const res = await apiFetch(`${API}/api/upload_resume`, {
                         method: "POST",
                         body: formData
                       });
@@ -149,37 +149,13 @@ export function ProfileView() {
                     {loading ? <RefreshCw className="w-6 h-6 text-blue-400 animate-spin" /> : <User className="w-6 h-6 text-[#C4C4C4]" />}
                   </div>
                   <h3 className="font-medium text-white mb-1">{loading ? "Analyzing..." : "Upload Your Resume"}</h3>
-                  <p className="text-sm text-zinc-500 mb-4">PDF or TXT format, saved in data/cvs</p>
+                  <p className="text-sm text-zinc-500 mb-4">PDF or TXT format, saved with your profile</p>
                   <div className="flex justify-center gap-2">
                     <span className="px-3 py-1.5 bg-zinc-800 rounded-lg text-xs border border-zinc-700">CV / Resume</span>
                   </div>
                 </div>
               </div>
 
-              <button
-                onClick={async () => {
-                  setLoading(true);
-                  try {
-                    const res = await fetch(`${API}/api/profile/sync`, { method: "POST" });
-                    const data = await res.json();
-                    if (data.count > 0) {
-                      await fetchProfile();
-                      alert(`Successfully synced ${data.count} CV(s) from data/cvs`);
-                    } else {
-                      alert("No new CVs found in data/cvs folder.");
-                    }
-                  } catch (err) {
-                    alert("Sync failed.");
-                  } finally {
-                    setLoading(false);
-                  }
-                }}
-                className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm rounded-lg border border-zinc-700 flex items-center justify-center gap-2 transition-colors"
-                disabled={loading}
-              >
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                Sync from data/cvs Folder
-              </button>
             </div>
 
             {/* File List */}
@@ -223,7 +199,7 @@ export function ProfileView() {
                       cv_text: activeProfile.cv_text || ""
                     };
 
-                    const res = await fetch(`${API}/api/profile/save`, {
+                    const res = await apiFetch(`${API}/api/profile/save`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(payload)
@@ -482,7 +458,7 @@ export function ProfileView() {
                       onChange={async (e) => {
                         const newStage = e.target.value;
                         try {
-                          await fetch(`${API}/api/applications/${app.id}`, {
+                          await apiFetch(`${API}/api/applications/${app.id}`, {
                             method: 'PATCH',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ stage: newStage })

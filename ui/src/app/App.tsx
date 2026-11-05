@@ -1,4 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
+import { supabase } from '@/app/api';
+import { Login } from '@/app/components/Login';
 import { JobExplorer, toJob } from '@/app/components/JobExplorer';
 import { JobDetail } from '@/app/components/JobDetail';
 import { GeneratorView } from '@/app/components/GeneratorView';
@@ -7,7 +10,8 @@ import {
   Briefcase,
   FileText,
   User,
-  Sparkles
+  Sparkles,
+  LogOut
 } from 'lucide-react';
 
 type View = 'jobs' | 'generator' | 'profile' | 'jobDetail';
@@ -31,6 +35,15 @@ function App() {
   const [currentView, setCurrentView] = useState<View>('jobs');
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [initialJobDescription, setInitialJobDescription] = useState<string>('');
+  // undefined = still reading the stored session; null = signed out
+  const [session, setSession] = useState<Session | null | undefined>(supabase ? undefined : null);
+
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    return () => data.subscription.unsubscribe();
+  }, []);
 
   const handleJobSelect = (job: Job) => {
     setSelectedJob(job);
@@ -67,6 +80,9 @@ function App() {
     }
   };
 
+  if (supabase && session === undefined) return <div className="min-h-screen bg-black" />;
+  if (supabase && !session) return <Login />;
+
   return (
     <div className="min-h-screen bg-black text-white">
       {/* Top Navigation */}
@@ -101,6 +117,16 @@ function App() {
                 active={currentView === 'profile'}
                 onClick={() => setCurrentView('profile')}
               />
+              {supabase && session && (
+                <button
+                  onClick={() => supabase!.auth.signOut()}
+                  title={`Sign out ${session.user.email ?? ''}`}
+                  aria-label="Sign out"
+                  className="ml-2 p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-900"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
         </div>

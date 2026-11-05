@@ -54,22 +54,13 @@ structured = "json_schema"
 [roles.extract]   # offer capture, CV parsing, offer analysis
 params = { temperature = 0.1, max_tokens = 4096 }
 
-[roles.write]     # letters, emails, CV tailoring
+[roles.write]     # letters, emails, interview prep
 params = { temperature = 0.4, max_tokens = 4096 }
-
-[roles.route]     # chat router
-params = { temperature = 0, max_tokens = 1024 }
-
-[roles.chat]      # general chat, RAG answers, stats agent
-params = { temperature = 0.3, max_tokens = 4096 }
 
 [roles.query]     # turns a natural-language search into filters + search words
 params = { temperature = 0, max_tokens = 1024 }
 
-[roles.judge]     # evaluate.py
-params = { temperature = 0, max_tokens = 2048 }
-
-[roles.embed]     # pinned: no free embedding model on HF. Changing it means rebuilding every index.
+[roles.embed]     # pinned: no free embedding model on HF. Changing it re-embeds every offer on the next search.
 provider = "gemini"
 model = "gemini-embedding-001"
 # Offer search: a result is "related" if its cosine is >= min_similarity AND within similarity_margin of the
