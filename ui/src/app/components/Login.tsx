@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import { supabase } from '@/app/api';
+import { supabase, getAuthError, clearAuthError } from '@/app/api';
 
 // Email + password sign-in / sign-up with Supabase Auth. The session is kept by supabase-js (local storage).
 export function Login() {
@@ -8,13 +8,17 @@ export function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(() => {
+    const e = getAuthError();
+    return e ? { text: e, error: true } : null;
+  });
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabase) return;
     setBusy(true);
     setMessage(null);
+    clearAuthError();
     const { data, error } = mode === 'signin'
       ? await supabase.auth.signInWithPassword({ email, password })
       : await supabase.auth.signUp({ email, password });

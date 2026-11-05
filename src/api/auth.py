@@ -12,10 +12,12 @@ from fastapi import Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from src.config.logging import logger
 from src.config.settings import settings
 from src.llm import port
 
 DEV_USER_ID = "00000000-0000-0000-0000-000000000001"
+CLOCK_LEEWAY_S = 30  # tolerated clock difference with Supabase, in seconds
 
 
 def check_config() -> None:
@@ -38,7 +40,9 @@ def verify(token: str, *, supabase_url: str, jwt_secret: str = "") -> str:
         key, algorithms = jwt_secret, ["HS256"]
     else:  # current projects: asymmetric signing keys, public half published as JWKS
         key, algorithms = _jwks(supabase_url).get_signing_key_from_jwt(token).key, ["ES256", "RS256"]
-    claims = jwt.decode(token, key, algorithms=algorithms, audience="authenticated",
+    # leeway: Supabase's clock and this server's are never exactly equal. Without it, a token issued a
+    # fraction of a second "in the future" (iat) is rejected right after sign-in.
+    claims = jwt.decode(token, key, algorithms=algorithms, audience="authenticated", leeway=CLOCK_LEEWAY_S,
                         issuer=f"{supabase_url}/auth/v1", options={"require": ["exp", "sub"]})
     return claims["sub"]
 
@@ -56,7 +60,8 @@ async def current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(_
         try:  # the first JWKS fetch is a network call: keep it off the event loop
             user_id = await run_in_threadpool(verify, creds.credentials, supabase_url=settings.SUPABASE_URL,
                                               jwt_secret=settings.SUPABASE_JWT_SECRET)
-        except jwt.PyJWTError:
+        except jwt.PyJWTError as e:  # the reason goes to the server log (never the token itself)
+            logger.warning(f"[auth] token rejected: {type(e).__name__}: {e}")
             raise HTTPException(status_code=401, detail="Invalid or expired session", headers={"WWW-Authenticate": "Bearer"})
     port.current_user.set(user_id)  # llm_calls rows record who triggered them
     return user_id
@@ -80,7 +85,10 @@ if __name__ == "__main__":
     assert verify(jwt.encode(good, SECRET, "HS256"), supabase_url=URL, jwt_secret=SECRET) == SUB
     assert rejected(jwt.encode(good, SECRET, "HS256"))                                    # no secret configured
     assert rejected(jwt.encode(good, "x" * 40, "HS256"), jwt_secret=SECRET)               # wrong signature
-    assert rejected(jwt.encode({**good, "exp": int(time.time()) - 5}, SECRET, "HS256"), jwt_secret=SECRET)  # expired
+    assert rejected(jwt.encode({**good, "exp": int(time.time()) - CLOCK_LEEWAY_S - 5}, SECRET, "HS256"), jwt_secret=SECRET)  # expired
+    # just issued by a server whose clock is a few seconds ahead (the "logged out right after sign-in" bug)
+    assert verify(jwt.encode({**good, "iat": int(time.time()) + 3}, SECRET, "HS256"), supabase_url=URL, jwt_secret=SECRET) == SUB
+    assert rejected(jwt.encode({**good, "iat": int(time.time()) + 600}, SECRET, "HS256"), jwt_secret=SECRET)  # far future: no
     assert rejected(jwt.encode({**good, "aud": "anon"}, SECRET, "HS256"), jwt_secret=SECRET)                # wrong audience
     assert rejected(jwt.encode({**good, "iss": "https://evil.supabase.co/auth/v1"}, SECRET, "HS256"), jwt_secret=SECRET)
     assert rejected(jwt.encode(good, None, "none"), jwt_secret=SECRET)                    # unsigned token
