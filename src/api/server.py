@@ -23,7 +23,12 @@ async def lifespan(app: FastAPI):
     db.close_pool()
 
 
-app = FastAPI(title="Career Mate API", lifespan=lifespan)
+# In production, don't publish the API's map (/docs, /redoc, /openapi.json); locally it stays available
+_public_docs = settings.APP_ENV != "production"
+app = FastAPI(title="Career Mate API", lifespan=lifespan,
+              docs_url="/docs" if _public_docs else None,
+              redoc_url="/redoc" if _public_docs else None,
+              openapi_url="/openapi.json" if _public_docs else None)
 
 app.add_middleware(
     CORSMiddleware,
