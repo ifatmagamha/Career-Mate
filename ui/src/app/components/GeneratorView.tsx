@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { API } from '@/app/api';
+import { API, apiFetch } from '@/app/api';
 import { FileText, Mail, MessageSquare, Sparkles, Download, Copy, RotateCw } from 'lucide-react';
 
 type GeneratorType = 'cover-letter' | 'cold-email' | 'interview';
@@ -47,7 +47,7 @@ export function GeneratorView({ initialDescription = '' }: GeneratorViewProps) {
     if (!jobDescription) return;
     setIsGenerating(true);
     try {
-      const res = await fetch(`${API}/api/generate`, {
+      const res = await apiFetch(`${API}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

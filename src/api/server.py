@@ -1,90 +1,59 @@
-from fastapi import FastAPI, HTTPException, Response
-from pydantic import BaseModel, Field
-from typing import List, Optional, Any
-from fastapi.middleware.cors import CORSMiddleware
-from langchain_core.messages import HumanMessage
-from contextlib import closing
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import List, Optional, get_args
+from urllib.parse import urlparse
 
-from src.graph.build_graph import build_recruit_graph
-from src.storage import db
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, field_validator
+
+from src.api.auth import check_config, current_user
 from src.config.logging import logger
+from src.config.settings import settings
+from src.schemas.job_offer import SheetContract, SheetRemote, SheetSeniority
+from src.storage import db
 
-# Initialize FastAPI
-app = FastAPI(title="Career Mate API")
+check_config()
 
-# Allow CORS for React app
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    db.close_pool()
+
+
+app = FastAPI(title="Career Mate API", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Search-Mode"],  # lets the UI tell when search fell back to keywords only
 )
 
+User = Depends(current_user)  # every /api route below runs for the signed-in user only
 
-# Initialize Graph
-graph = build_recruit_graph()
-
-# --- Models ---
-class ChatRequest(BaseModel):
-    message: str
-    history: Optional[List[dict]] = None
-
-class Job(BaseModel):
-    id: str
-    title: str
-    company: str
-    location: str
-    matchScore: int
-    description: str
-
-class ProfileSwitchRequest(BaseModel):
-    profile_key: str
-
-# --- Global State (MVP) ---
-ACTIVE_PROFILE_KEY = "custom"
-
-# --- Endpoints ---
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-@app.get("/")
-def root():
-    return {"message": "RecruitAI API is running. Visit /docs for Swagger UI or open the React App."}
 
-@app.post("/api/profile/switch")
-def switch_profile(req: ProfileSwitchRequest):
-    # For now, we only support the single 'custom' profile in this simplified view
-    return {"status": "ok", "active_profile": "custom"}
+# --- Profile (parsed CV) ---
 
 @app.get("/api/profile/current")
-def get_current_profile():
-    from src.data.mock_profiles import MOCK_PROFILES
-    
-    # Check if we have a custom uploaded profile
-    profile = MOCK_PROFILES.get("custom")
-    
-    if not profile:
-        # Return empty state if no profile uploaded yet
-        return {
-            "key": None,
-            "name": "",
-            "title": "",
-            "email": "",
-            "location": "",
-            "skills": [],
-            "summary": "",
-            "experience": [] 
-        }
-
+def get_current_profile(uid: str = User):
+    from src.ingestion.resume_parser import load_saved_profile
+    with db.connection() as conn:
+        profile = load_saved_profile(conn, uid)
+    if not profile:  # empty state until a CV is uploaded
+        return {"key": None, "name": "", "title": "", "email": "", "location": "", "skills": [], "summary": "", "experience": []}
     return {
         "key": "custom",
         "name": profile.full_name or "",
-        "title": profile.summary[:50] + "..." if profile.summary else "My Profile", 
+        "title": profile.summary[:50] + "..." if profile.summary else "My Profile",
         "email": profile.email,
         "location": profile.location,
         "skills": profile.skills or [],
@@ -92,288 +61,81 @@ def get_current_profile():
         "experience": profile.experience or [],
         "education": profile.education or [],
         "projects": profile.projects or [],
-        "cv_text": profile.cv_text
+        "cv_text": profile.cv_text,
     }
 
-from fastapi import UploadFile, File
-from src.ingestion.resume_parser import handle_resume_upload
-
-@app.on_event("startup")
-async def startup_event():
-    """Reload the saved profile (data/profile.json); parse the latest CV in data/cvs only if none is saved."""
-    from src.ingestion.resume_parser import restore_profile
-    from src.data.mock_profiles import MOCK_PROFILES
-    try:
-        profile = await asyncio.to_thread(restore_profile)
-        if profile:
-            MOCK_PROFILES["custom"] = profile
-        logger.info(f"Startup: profile {'loaded for ' + str(profile.full_name) if profile else 'not found (upload a CV)'}")
-    except Exception as e:
-        logger.error(f"Startup profile restore failed: {e}")
 
 @app.post("/api/upload_resume")
-async def upload_resume(file: UploadFile = File(...)):
-    """
-    Save the CV in data/cvs, parse it, save the profile and set it as active.
-    """
-    global ACTIVE_PROFILE_KEY
+async def upload_resume(file: UploadFile = File(...), uid: str = User):
+    """Parse the CV, then store the profile and the file itself for this user."""
+    from src.ingestion.resume_parser import parse_cv, read_upload, save_cv
     try:
-        profile, raw_data = await handle_resume_upload(file)
+        name, content = await read_upload(file)
+        profile, raw_data = await asyncio.to_thread(parse_cv, name, content)
     except ValueError as e:  # wrong type, too large, unreadable
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         logger.error(f"Upload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Could not parse the CV")
 
-    from src.data.mock_profiles import MOCK_PROFILES
-    MOCK_PROFILES["custom"] = profile
-    ACTIVE_PROFILE_KEY = "custom"
-    return {
-        "status": "success",
-        "profile": raw_data,
-        "message": "Resume saved, parsed and set as active."
-    }
+    def save():
+        with db.connection() as conn:
+            save_cv(conn, uid, profile, name, content)
+    await asyncio.to_thread(save)
+    return {"status": "success", "profile": raw_data, "message": "Resume saved and parsed."}
 
-@app.post("/api/profile/sync")
-async def sync_profile_folder():
-    """Trigger manual sync from data/cvs folder."""
-    from src.ingestion.resume_parser import sync_cvs_folder
-    count = await sync_cvs_folder()
-    return {"status": "success", "count": count, "message": f"Synced {count} CVs from data/cvs"}
+
+@app.post("/api/profile/save")
+def save_profile(profile_data: dict, uid: str = User):
+    from src.schemas.candidate import CandidateProfile
+    try:
+        profile = CandidateProfile(**profile_data)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    with db.connection() as conn:
+        db.save_profile(conn, uid, profile.model_dump())
+    return {"status": "success", "message": "Profile updated successfully"}
+
 
 @app.post("/api/generate")
-async def generate_content(payload: dict):
-    """
-    Generates tailored career content (Cover Letter, Email, Interview).
-    Flow: Analyze JD -> Fetch Profile -> Generate
-    """
-    from src.agents.analyzer import analyze_offer_llm
+def generate_content(payload: dict, uid: str = User):
+    """Tailored content (cover letter, cold email, interview prep): analyze the job text, then write from the profile."""
+    from src.agents.analyzer import analyze_offer_llm, heuristic_analyze_offer
     from src.agents.writer import generate_documents
+    from src.ingestion.resume_parser import load_saved_profile
     from src.schemas.job_offer import OfferRaw
-    from src.data.mock_profiles import MOCK_PROFILES
-    
+
     doc_type = payload.get("type", "cover-letter")
     raw_jd = payload.get("job_description", "")
     extra = payload.get("extra", "professional")
-    
     if not raw_jd:
         raise HTTPException(status_code=400, detail="Job description required.")
-    
-    # 1. Fetch Candidate
-    candidate = MOCK_PROFILES.get("custom")
+
+    with db.connection() as conn:
+        candidate = load_saved_profile(conn, uid)
     if not candidate:
         raise HTTPException(status_code=400, detail="No profile found. Please upload a CV first.")
-        
-    # 2. Analyze Job (Agentic step)
-    from src.agents.analyzer import heuristic_analyze_offer
-    
-    # Try to extract a title from the first line if it's short
+
+    # Use the first line as the title if it is short
     initial_title = "Target Position"
     lines = [l.strip() for l in raw_jd.split('\n') if l.strip()]
     if lines and len(lines[0]) < 60:
         initial_title = lines[0]
 
-    temp_offer = OfferRaw(
-        source="custom_input",
-        title=initial_title,
-        company="Target Company",
-        location="Remote",
-        description=raw_jd,
-        url="https://internal.app"
-    )
+    temp_offer = OfferRaw(source="custom_input", title=initial_title, company="Target Company",
+                          location="Remote", description=raw_jd, url="https://internal.app")
     try:
         analyzed_offer = analyze_offer_llm(temp_offer)
-        # If LLM didn't change the placeholder title, try our heuristic again
         if analyzed_offer.title == "Target Position" and initial_title != "Target Position":
             analyzed_offer.title = initial_title
     except Exception as e:
         logger.warning(f"Generator flow: LLM analysis failed, falling back to heuristic. Error: {e}")
         analyzed_offer = heuristic_analyze_offer(temp_offer)
-    
-    # 3. Generate content
-    content = generate_documents(candidate, analyzed_offer, doc_type=doc_type, extra=extra)
-    
-    return {
-        "status": "success",
-        "content": content
-    }
 
-@app.post("/api/profile/save")
-async def save_profile(profile_data: dict):
-    """
-    Save updated profile data back to the store.
-    """
-    try:
-        from src.data.mock_profiles import MOCK_PROFILES
-        from src.schemas.candidate import CandidateProfile
-        from src.ingestion.resume_parser import save_profile as persist_profile, index_profile_for_rag
+    return {"status": "success", "content": generate_documents(candidate, analyzed_offer, doc_type=doc_type, extra=extra)}
 
-        profile = CandidateProfile(**profile_data)
-        MOCK_PROFILES["custom"] = profile
-        persist_profile(profile)              # survives restarts (data/profile.json)
-        await asyncio.to_thread(index_profile_for_rag, profile)  # RAG answers from the edited profile
 
-        return {"status": "success", "message": "Profile updated successfully"}
-    except Exception as e:
-        logger.error(f"Save failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-from fastapi.responses import StreamingResponse
-import json
-import asyncio
-
-@app.post("/api/chat/stream")
-async def chat_stream(req: ChatRequest):
-    async def event_generator():
-        # MVP: Inject Selected Profile
-        from src.data.mock_profiles import MOCK_PROFILES
-        candidate = MOCK_PROFILES.get("custom")
-        if not candidate:
-            from src.schemas.candidate import CandidateProfile
-            candidate = CandidateProfile(
-                full_name="Guest", 
-                email="guest@example.com", 
-                location="Unknown", 
-                cv_text="Dummy CV text for testing."
-            )
-        
-        inputs = {
-            "messages": [HumanMessage(content=req.message)], 
-            "query": req.message,
-            "candidate": candidate
-        }
-
-        # Step 1: Notify the UI that we are routing/thinking
-        yield json.dumps({"type": "status", "data": "RecruitAI is thinking..."}) + "\n"
-        
-        # Run graph in a separate thread to avoid blocking if nodes are sync
-        loop = asyncio.get_event_loop()
-        state = await loop.run_in_executor(None, lambda: graph.invoke(inputs))
-        
-        messages = state.get("messages", [])
-        last_msg = messages[-1].text if messages else "No response."
-        
-        # Simulate word-by-word streaming for the UI "feel"
-        words = last_msg.split(" ")
-        for i in range(len(words)):
-            chunk = words[i] + (" " if i < len(words) - 1 else "")
-            yield json.dumps({"type": "chunk", "data": chunk}) + "\n"
-            await asyncio.sleep(0.01) # Small delay for cinematic feel
-            
-        # Final metadata
-        node = state.get("active_node")
-        agent_name = "RecruitAI"
-        if node == "rag": agent_name = "RAG Agent"
-        elif node == "job_pipeline": agent_name = "Job Pipeline"
-        elif node == "chat": agent_name = "RecruitAI"
-        
-        offers = state.get("offers_analyzed") or []
-        yield json.dumps({"type": "done", "agent": agent_name, "offers_count": len(offers)}) + "\n"
-
-    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
-
-@app.post("/api/chat")
-async def chat(req: ChatRequest):
-    # Keep the original sync chat as fallback
-    logger.info(f"API Chat request: {req.message}")
-    try:
-        from src.data.mock_profiles import MOCK_PROFILES
-        candidate = MOCK_PROFILES.get("custom")
-        if not candidate:
-            from src.schemas.candidate import CandidateProfile
-            candidate = CandidateProfile(full_name="Guest", email="guest@example.com", location="Unknown", cv_text="Dummy CV")
-        
-        inputs = {"messages": [HumanMessage(content=req.message)], "query": req.message, "candidate": candidate}
-        state = graph.invoke(inputs)
-        last_msg = state.get("messages", [])[-1].text if state.get("messages") else "No response."
-        return {"response": last_msg, "agent": "RecruitAI", "offers_count": len(state.get("offers_analyzed") or [])}
-    except Exception as e:
-        logger.error(f"API Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/system/stats")
-def get_system_stats():
-    """Returns metadata about the collector and storage."""
-    from src.config.settings import settings
-    import os
-    import json
-    
-    raw_path = os.path.join(settings.DATA_DIR, "job_offers_raw.json")
-    analyzed_path = os.path.join(settings.DATA_DIR, "job_offers_analyzed.json")
-    matches_path = os.path.join(settings.DATA_DIR, "matches.json")
-    
-    stats = {
-        "raw_count": 0,
-        "analyzed_count": 0,
-        "matches_count": 0,
-        "last_updated": "Never",
-        "storage_dir": settings.DATA_DIR
-    }
-    
-    try:
-        if os.path.exists(raw_path):
-            with open(raw_path, "r", encoding="utf-8") as f:
-                stats["raw_count"] = len(json.load(f))
-        
-        if os.path.exists(analyzed_path):
-            with open(analyzed_path, "r", encoding="utf-8") as f:
-                stats["analyzed_count"] = len(json.load(f))
-                
-        if os.path.exists(matches_path):
-            with open(matches_path, "r", encoding="utf-8") as f:
-                stats["matches_count"] = len(json.load(f))
-                stats["last_updated"] = datetime.fromtimestamp(os.path.getmtime(matches_path)).strftime("%Y-%m-%d %H:%M:%S")
-    except:
-        pass
-        
-    return stats
-
-@app.get("/api/jobs")
-def get_jobs():
-    """
-    Return the latest matched jobs from the agent pipeline.
-    """
-    try:
-        from src.config.settings import settings
-        from pathlib import Path
-        import json
-        
-        matches_path = Path(settings.DATA_DIR) / "matches.json"
-        analyzed_path = Path(settings.DATA_DIR) / "job_offers_analyzed.json"
-        
-        # Prefer matches.json (scored) over job_offers_analyzed.json (unscored)
-        path = matches_path if matches_path.exists() else analyzed_path
-        
-        if not path.exists():
-            return []
-            
-        data = json.loads(path.read_text(encoding="utf-8"))
-        results = []
-        for i, m in enumerate(data):
-            # Check if it's a MatchResult or OfferAnalyzed (MatchResult has 'score')
-            score = m.get("score", 70) # Default if not matched yet
-            results.append({
-                "id": str(m.get("url") or i),
-                "title": m.get("title", "Unknown"),
-                "company": m.get("company", "Unknown"),
-                "location": m.get("location", "Unknown"),
-                "matchScore": int(score),
-                "description": m.get("summary") or m.get("title"),
-                "skills": m.get("skills", []),
-                "requirements": m.get("requirements", []),
-                "url": str(m.get("url", "")),
-                "salary": m.get("salary", "Competitive"),
-                "type": m.get("contract_type", "Full-time"),
-                "postedDate": m.get("postedDate", "Today")
-            })
-            
-        return results
-    except Exception as e:
-        logger.error(f"Failed to fetch jobs: {e}")
-        return [] 
-
-# --- Applications Endpoints ---
-
+# --- Applications ---
 # An application is what I do with an offer (1:1); stage == applications.status
 
 def _to_application(o: dict) -> dict:
@@ -389,47 +151,35 @@ def _to_application(o: dict) -> dict:
         "appliedDate": datetime.fromisoformat(o["applied_at"] or o["created_at"]).strftime("%b %d, %Y"),
     }
 
+
 @app.get("/api/statuses")
 def get_statuses():
     return list(db.STATUSES)
 
-@app.get("/api/applications")
-def get_applications():
-    with closing(db.connect()) as conn:
-        return [_to_application(o) for o in db.list_offers(conn)]
 
-@app.post("/api/applications")
-def add_application(app_data: dict):
-    with closing(db.connect()) as conn:
-        try:
-            offer = db.insert_offer(conn, {
-                "title": app_data.get("title", "Unknown"),
-                "company": app_data.get("company"),
-                "location": app_data.get("location"),
-                "salary": app_data.get("salary"),
-                "match_score": app_data.get("matchScore"),
-                "source": "manual",
-            }, status=app_data.get("stage", "saved"))
-        except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e))
-        return _to_application(offer)
+@app.get("/api/applications")
+def get_applications(uid: str = User):
+    with db.connection() as conn:
+        return [_to_application(o) for o in db.list_offers(conn, uid)]
+
 
 @app.patch("/api/applications/{app_id}")
-def update_application(app_id: str, updates: dict):
-    with closing(db.connect()) as conn:
-        offer = db.get_offer_by_application(conn, app_id)
+def update_application(app_id: str, updates: dict, uid: str = User):
+    with db.connection() as conn:
+        offer = db.get_offer_by_application(conn, uid, app_id)
         if not offer:
             raise HTTPException(status_code=404, detail="Application not found")
         try:
             if "stage" in updates:
-                offer = db.update_status(conn, app_id, updates["stage"])
+                offer = db.update_status(conn, uid, app_id, updates["stage"])
             if "folder_id" in updates:  # null = unfiled (drag back to "Unfiled")
-                offer = db.set_folder(conn, app_id, updates["folder_id"] or None)
+                offer = db.set_folder(conn, uid, app_id, updates["folder_id"] or None)
             if "notes" in updates:
-                offer = db.set_notes(conn, app_id, str(updates["notes"] or "")[:20000])
+                offer = db.set_notes(conn, uid, app_id, str(updates["notes"] or "")[:20000])
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
         return _to_application(offer)
+
 
 # --- Offers (capture) ---
 
@@ -437,31 +187,30 @@ class CaptureRequest(BaseModel):
     url: Optional[str] = None
     text: Optional[str] = None
 
+
 @app.post("/api/offers/capture")
-def capture(req: CaptureRequest):
+def capture(req: CaptureRequest, uid: str = User):
     from src.agents.capture import capture_offer, CaptureError
 
     url = req.url.strip().split("#")[0] if req.url and req.url.strip() else None
     text = req.text.strip() if req.text and req.text.strip() else None
 
-    with closing(db.connect()) as conn:
-        if url and not text:
-            existing = db.find_offer_by_url(conn, url)
-            if existing:
+    if url and not text:
+        with db.connection() as conn:
+            if existing := db.find_offer_by_url(conn, uid, url):
                 return {"offer": existing, "duplicate": True}
-        try:
-            fields = capture_offer(url=url, text=text)
-        except CaptureError as e:
-            raise HTTPException(status_code=422, detail=str(e))
-        except Exception as e:
-            logger.error(f"[capture] failed for {url}: {e}")
-            raise HTTPException(status_code=502, detail=f"Capture failed: {e}")
-        if url and db.find_offer_by_url(conn, url):
+    try:  # fetch + LLM extraction: no DB connection held meanwhile
+        fields = capture_offer(url=url, text=text)
+    except CaptureError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.error(f"[capture] failed for {url}: {e}")
+        raise HTTPException(status_code=502, detail=f"Capture failed: {e}")
+    with db.connection() as conn:
+        if url and (existing := db.find_offer_by_url(conn, uid, url)):
             # pasted text for a URL already captured: keep the first sheet
-            return {"offer": db.find_offer_by_url(conn, url), "duplicate": True}
-        return {"offer": db.insert_offer(conn, fields, actor="ai"), "duplicate": False}
-
-from fastapi import Query
+            return {"offer": existing, "duplicate": True}
+        return {"offer": db.insert_offer(conn, uid, fields, actor="ai"), "duplicate": False}
 
 
 @app.get("/api/offers")
@@ -475,16 +224,16 @@ def get_offers(
     deadline_before: Optional[str] = None,
     sort: Optional[str] = None,  # recent | deadline | title | company | updated | relevance
     mode: str = "hybrid",  # hybrid | keyword | semantic
+    uid: str = User,
 ):
-    """Search (keyword BM25 + semantic embeddings, fused) + filters + sort. Same filter keys as saved views."""
+    """Search (keyword full-text + semantic embeddings, fused) + filters + sort. Same filter keys as saved views."""
     from src.storage.offer_search import MODES, search_offers
     if mode not in MODES:
         raise HTTPException(status_code=422, detail=f"mode must be one of {', '.join(MODES)}")
-    with closing(db.connect()) as conn:
-        offers, used = search_offers(conn, {
+    with db.connection() as conn:
+        offers, used = search_offers(conn, uid, {
             "q": q, "status": status, "folder": folder, "contract_type": contract_type,
-            "remote_policy": remote_policy,
-            "deadline_before": deadline_before, "sort": sort,
+            "remote_policy": remote_policy, "deadline_before": deadline_before, "sort": sort,
         }, mode=mode)
     response.headers["X-Search-Mode"] = used  # e.g. "keyword (semantic unavailable)" when embeddings fail
     return offers
@@ -495,37 +244,33 @@ class InterpretRequest(BaseModel):
 
 
 @app.post("/api/offers/interpret")
-def interpret_query(req: InterpretRequest):
+def interpret_query(req: InterpretRequest, uid: str = User):
     """Natural-language search -> {q, filters, folder_id, deadline_before, sort, applied}. The UI applies it as filters."""
     from src.agents.query_interpreter import interpret
     from src.llm.port import LLMError
-    with closing(db.connect()) as conn:
+    with db.connection() as conn:
         try:
-            return interpret(conn, req.text)
+            return interpret(conn, uid, req.text)
         except LLMError as e:  # quota, missing key, invalid output: the user can still search by keywords
             raise HTTPException(status_code=503, detail=f"Could not interpret the request: {str(e)[:200]}")
 
 
 @app.get("/api/offer-facets")
-def get_offer_facets():
-    with closing(db.connect()) as conn:
-        return db.offer_facets(conn)
+def get_offer_facets(uid: str = User):
+    with db.connection() as conn:
+        return db.offer_facets(conn, uid)
+
 
 @app.get("/api/offers/{offer_id}")
-def get_offer(offer_id: str):
-    with closing(db.connect()) as conn:
-        offer = db.get_offer(conn, offer_id)
+def get_offer(offer_id: str, uid: str = User):
+    with db.connection() as conn:
+        offer = db.get_offer(conn, uid, offer_id)
     if not offer:
         raise HTTPException(status_code=404, detail="Offer not found")
     return offer
 
+
 # --- Manual offers, folders, contacts ---
-
-from typing import get_args
-from urllib.parse import urlparse
-from pydantic import Field, field_validator
-from src.schemas.job_offer import SheetContract, SheetRemote, SheetSeniority
-
 
 def _http_url(v: Optional[str]) -> Optional[str]:
     """Links are rendered as <a href>: only http(s) (a javascript: URL would run code on click)."""
@@ -597,18 +342,18 @@ class ManualOffer(BaseModel):
 
 
 @app.post("/api/offers", status_code=201)
-def create_offer(req: ManualOffer):
+def create_offer(req: ManualOffer, uid: str = User):
     """Manual offer card: same fields and normalization as a captured offer."""
-    with closing(db.connect()) as conn:
-        if req.url and (existing := db.find_offer_by_url(conn, req.url)):
+    with db.connection() as conn:
+        if req.url and (existing := db.find_offer_by_url(conn, uid, req.url)):
             raise HTTPException(status_code=409, detail={"message": "This link is already saved", "offer_id": existing["id"]})
         data = req.model_dump(exclude={"status", "folder_id", "notes"})
         try:
-            offer = db.insert_offer(conn, {**data, "source": "manual"}, status=req.status, actor="user")
+            offer = db.insert_offer(conn, uid, {**data, "source": "manual"}, status=req.status, actor="user")
             if req.folder_id:
-                offer = db.set_folder(conn, offer["application_id"], req.folder_id)
+                offer = db.set_folder(conn, uid, offer["application_id"], req.folder_id)
             if req.notes:
-                offer = db.set_notes(conn, offer["application_id"], req.notes)
+                offer = db.set_notes(conn, uid, offer["application_id"], req.notes)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
         return offer
@@ -640,12 +385,12 @@ class OfferPatch(BaseModel):
 
 
 @app.patch("/api/offers/{offer_id}")
-def patch_offer(offer_id: str, req: OfferPatch):
+def patch_offer(offer_id: str, req: OfferPatch, uid: str = User):
     changes = req.model_dump(exclude_unset=True)
-    with closing(db.connect()) as conn:
-        if changes.get("url") and (other := db.find_offer_by_url(conn, changes["url"])) and other["id"] != offer_id:
+    with db.connection() as conn:
+        if changes.get("url") and (other := db.find_offer_by_url(conn, uid, changes["url"])) and other["id"] != offer_id:
             raise HTTPException(status_code=409, detail={"message": "Another offer already has this link", "offer_id": other["id"]})
-        offer = db.update_offer(conn, offer_id, changes)
+        offer = db.update_offer(conn, uid, offer_id, changes)
     if not offer:
         raise HTTPException(status_code=404, detail="Offer not found")
     return offer
@@ -657,14 +402,13 @@ class ViewIn(BaseModel):
     layout: str = "grid"
 
 
-def _save_view(req: ViewIn, view_id: Optional[str] = None):
-    import sqlite3
+def _save_view(uid: str, req: ViewIn, view_id: Optional[str] = None):
     allowed = {"q", "status", "folder", "contract_type", "remote_policy", "deadline_before", "sort"}
     filters = {k: v for k, v in req.filters.items() if k in allowed and v not in (None, "", [])}
-    with closing(db.connect()) as conn:
+    with db.connection() as conn:
         try:
-            return db.save_view(conn, req.name, filters, req.layout, view_id)
-        except sqlite3.IntegrityError:
+            return db.save_view(conn, uid, req.name, filters, req.layout, view_id)
+        except db.IntegrityError:
             raise HTTPException(status_code=409, detail="A view with this name already exists")
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
@@ -673,25 +417,25 @@ def _save_view(req: ViewIn, view_id: Optional[str] = None):
 
 
 @app.get("/api/views")
-def get_views():
-    with closing(db.connect()) as conn:
-        return db.list_views(conn)
+def get_views(uid: str = User):
+    with db.connection() as conn:
+        return db.list_views(conn, uid)
 
 
 @app.post("/api/views", status_code=201)
-def post_view(req: ViewIn):
-    return _save_view(req)
+def post_view(req: ViewIn, uid: str = User):
+    return _save_view(uid, req)
 
 
 @app.put("/api/views/{view_id}")
-def put_view(view_id: str, req: ViewIn):
-    return _save_view(req, view_id)
+def put_view(view_id: str, req: ViewIn, uid: str = User):
+    return _save_view(uid, req, view_id)
 
 
 @app.delete("/api/views/{view_id}", status_code=204)
-def remove_view(view_id: str):
-    with closing(db.connect()) as conn:
-        if not db.delete_view(conn, view_id):
+def remove_view(view_id: str, uid: str = User):
+    with db.connection() as conn:
+        if not db.delete_view(conn, uid, view_id):
             raise HTTPException(status_code=404, detail="View not found")
 
 
@@ -700,39 +444,37 @@ class FolderIn(BaseModel):
 
 
 @app.get("/api/folders")
-def get_folders():
-    with closing(db.connect()) as conn:
-        return db.list_folders(conn)
+def get_folders(uid: str = User):
+    with db.connection() as conn:
+        return db.list_folders(conn, uid)
 
 
 @app.post("/api/folders", status_code=201)
-def post_folder(req: FolderIn):
-    import sqlite3
-    with closing(db.connect()) as conn:
+def post_folder(req: FolderIn, uid: str = User):
+    with db.connection() as conn:
         try:
-            return db.create_folder(conn, req.name)
-        except sqlite3.IntegrityError:
+            return db.create_folder(conn, uid, req.name)
+        except db.IntegrityError:
             raise HTTPException(status_code=409, detail="A folder with this name already exists")
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
 
 
 @app.patch("/api/folders/{folder_id}")
-def patch_folder(folder_id: str, req: FolderIn):
-    import sqlite3
-    with closing(db.connect()) as conn:
+def patch_folder(folder_id: str, req: FolderIn, uid: str = User):
+    with db.connection() as conn:
         try:
-            if not db.rename_folder(conn, folder_id, req.name):
+            if not db.rename_folder(conn, uid, folder_id, req.name):
                 raise HTTPException(status_code=404, detail="Folder not found")
-        except sqlite3.IntegrityError:
+        except db.IntegrityError:
             raise HTTPException(status_code=409, detail="A folder with this name already exists")
         return {"id": folder_id, "name": req.name.strip()}
 
 
 @app.delete("/api/folders/{folder_id}", status_code=204)
-def remove_folder(folder_id: str):
-    with closing(db.connect()) as conn:
-        if not db.delete_folder(conn, folder_id):
+def remove_folder(folder_id: str, uid: str = User):
+    with db.connection() as conn:
+        if not db.delete_folder(conn, uid, folder_id):
             raise HTTPException(status_code=404, detail="Folder not found")
 
 
@@ -757,31 +499,31 @@ class ContactPatch(BaseModel):
 
 
 @app.get("/api/applications/{app_id}/contacts")
-def get_contacts(app_id: str):
-    with closing(db.connect()) as conn:
-        return db.list_contacts(conn, app_id)
+def get_contacts(app_id: str, uid: str = User):
+    with db.connection() as conn:
+        return db.list_contacts(conn, uid, app_id)
 
 
 @app.post("/api/applications/{app_id}/contacts", status_code=201)
-def post_contact(app_id: str, req: ContactIn):
-    with closing(db.connect()) as conn:
-        contact = db.add_contact(conn, app_id, req.model_dump())
+def post_contact(app_id: str, req: ContactIn, uid: str = User):
+    with db.connection() as conn:
+        contact = db.add_contact(conn, uid, app_id, req.model_dump())
     if not contact:
         raise HTTPException(status_code=404, detail="Application not found")
     return contact
 
 
 @app.patch("/api/contacts/{contact_id}")
-def patch_contact(contact_id: str, req: ContactPatch):
-    with closing(db.connect()) as conn:
-        contact = db.update_contact(conn, contact_id, req.model_dump(exclude_unset=True))
+def patch_contact(contact_id: str, req: ContactPatch, uid: str = User):
+    with db.connection() as conn:
+        contact = db.update_contact(conn, uid, contact_id, req.model_dump(exclude_unset=True))
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     return contact
 
 
 @app.delete("/api/contacts/{contact_id}", status_code=204)
-def remove_contact(contact_id: str):
-    with closing(db.connect()) as conn:
-        if not db.delete_contact(conn, contact_id):
+def remove_contact(contact_id: str, uid: str = User):
+    with db.connection() as conn:
+        if not db.delete_contact(conn, uid, contact_id):
             raise HTTPException(status_code=404, detail="Contact not found")

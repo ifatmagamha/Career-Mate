@@ -66,20 +66,3 @@ class OfferSheet(BaseModel):
     missions: List[str] = Field(default_factory=list)
     requirements: List[str] = Field(default_factory=list)
     summary: Optional[str] = None
-
-
-class MatchResult(BaseModel):
-    """Résultat du matching candidat <-> offre."""
-    model_config = ConfigDict(extra="ignore")
-
-    url: HttpUrl
-    title: str
-    company: Optional[str] = None
-    location: Optional[str] = None
-    salary: Optional[str] = "Competitive"
-    postedDate: Optional[str] = "Today"
-
-    score: int = Field(ge=0, le=100, description="Score de matching 0..100")
-    reasons: List[str] = Field(default_factory=list, description="Pourquoi ça match (bullet points)")
-    missing_skills: List[str] = Field(default_factory=list, description="Compétences manquantes (bullet points)")
-    strong_points: List[str] = Field(default_factory=list, description="Points forts du candidat vs l'offre")

@@ -4,14 +4,13 @@ and the cosine distribution of relevant vs irrelevant pairs.
 
 Re-run after changing the embedding model, then set min_similarity in [roles.embed] of config/models.toml:
   uv run python scripts/measure_search.py
-Uses a throwaway database (your data is not touched); ~11 embedding calls.
+Uses a throwaway Postgres schema (your data is not touched); ~11 embedding calls.
 """
 import sys
-import tempfile
-from pathlib import Path
+import uuid
+from statistics import mean, median
 
 sys.path.insert(0, ".")
-import numpy as np
 
 import src.storage.offer_search as S
 from src.storage import db
@@ -51,26 +50,33 @@ QUERIES = {
     "recrutement RH": {9},
 }
 
-with tempfile.TemporaryDirectory() as d:
-    conn = db.connect(Path(d) / "m.db")
-    ids = [db.insert_offer(conn, o)["id"] for o in OFFERS]
+
+
+def pct(xs, p):
+    """p-th percentile (nearest rank)."""
+    xs = sorted(xs)
+    return xs[min(len(xs) - 1, max(0, round(p / 100 * (len(xs) - 1))))]
+
+
+U = str(uuid.uuid4())
+with db.temp_schema() as conn:
+    ids = [db.insert_offer(conn, U, o)["id"] for o in OFFERS]
     idx = {oid: i for i, oid in enumerate(ids)}
     model = S._embed_model()
-    print("embedded:", S.ensure_embeddings(conn, model=model), "offers with", model)
+    print("embedded:", S.ensure_embeddings(conn, U, model=model), "offers with", model)
 
     rel_sims, irr_sims = [], []
     keep_k, keep_min = S.DENSE_TOP_K, S.MIN_SIMILARITY
     S.DENSE_TOP_K, S.MIN_SIMILARITY = 100, -1.0  # raw cosines for every offer
-    raw = {q: dict(S.semantic_ranking(conn, q, ids, embed=S._default_embed, model=model)) for q in QUERIES}
+    raw = {q: dict(S.semantic_ranking(conn, U, q, ids, embed=S._default_embed, model=model)) for q in QUERIES}
     S.DENSE_TOP_K, S.MIN_SIMILARITY = keep_k, keep_min
     for q, rel in QUERIES.items():
         for oid, sim in raw[q].items():
             (rel_sims if idx[oid] in rel else irr_sims).append(sim)
-    rel_sims, irr_sims = np.array(rel_sims), np.array(irr_sims)
-    print(f"cosine relevant   min {rel_sims.min():.3f}  p10 {np.percentile(rel_sims, 10):.3f}  median {np.median(rel_sims):.3f}")
-    print(f"cosine irrelevant max {irr_sims.max():.3f}  p90 {np.percentile(irr_sims, 90):.3f}  median {np.median(irr_sims):.3f}")
+    print(f"cosine relevant   min {min(rel_sims):.3f}  p10 {pct(rel_sims, 10):.3f}  median {median(rel_sims):.3f}")
+    print(f"cosine irrelevant max {max(irr_sims):.3f}  p90 {pct(irr_sims, 90):.3f}  median {median(irr_sims):.3f}")
     for thr in (0.55, 0.6, 0.62, 0.65, 0.68, 0.7):
-        tp = (rel_sims >= thr).sum(); fp = (irr_sims >= thr).sum()
+        tp = sum(x >= thr for x in rel_sims); fp = sum(x >= thr for x in irr_sims)
         print(f"  threshold {thr:.2f}: keeps {tp}/{len(rel_sims)} relevant, {fp}/{len(irr_sims)} irrelevant")
 
     def evaluate(floor, margin):
@@ -79,22 +85,21 @@ with tempfile.TemporaryDirectory() as d:
             recall3, prec, mrr = [], [], []
             for q, rel in QUERIES.items():
                 if mode == "keyword":
-                    res = [o["id"] for o in db.query_offers(conn, {"q": q, "sort": "relevance"})]
+                    res = [o["id"] for o in db.query_offers(conn, U, {"q": q, "sort": "relevance"})]
                 else:
-                    dense = [oid for oid, _ in S.semantic_ranking(conn, q, ids, embed=S._default_embed, model=model,
+                    dense = [oid for oid, _ in S.semantic_ranking(conn, U, q, ids, embed=S._default_embed, model=model,
                                                                   min_similarity=floor, margin=margin)]
                     if mode == "semantic":
                         res = dense
                     else:
-                        kw = [o["id"] for o in db.query_offers(conn, {"q": q, "sort": "relevance"})]
+                        kw = [o["id"] for o in db.query_offers(conn, U, {"q": q, "sort": "relevance"})]
                         sc = S.rrf(kw, dense)
                         res = sorted(sc, key=lambda i: -sc[i])
                 got = [idx[r] for r in res]
                 recall3.append(len(set(got[:3]) & rel) / len(rel))
                 prec.append(len(set(got) & rel) / len(got) if got else 0.0)
                 mrr.append(next((1 / (i + 1) for i, g in enumerate(got) if g in rel), 0.0))
-            print(f"  {mode:<8} recall@3 {np.mean(recall3):.2f}  precision {np.mean(prec):.2f}  MRR {np.mean(mrr):.2f}")
+            print(f"  {mode:<8} recall@3 {mean(recall3):.2f}  precision {mean(prec):.2f}  MRR {mean(mrr):.2f}")
 
     for floor, margin in ((0.55, None), (0.45, 0.03), (0.45, 0.05), (0.45, 0.08), (0.5, 0.05)):
         evaluate(floor, margin)
-    conn.close()

@@ -1,5 +1,4 @@
 from pathlib import Path
-from src.config.settings import settings
 
 def load_prompt(prompt_name: str) -> str:
     """
@@ -15,7 +14,7 @@ def load_prompt(prompt_name: str) -> str:
         path = Path("src/prompts") / prompt_name
         if not path.exists():
             # Fallback for different CWD
-            path = Path(settings.PROJECT_ROOT) / "src" / "prompts" / prompt_name
+            path = Path(__file__).resolve().parents[1] / "prompts" / prompt_name
             
         return path.read_text(encoding="utf-8").strip()
     except Exception as e:

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { API } from '@/app/api';
+import { API, apiFetch } from '@/app/api';
 import { X, Loader } from 'lucide-react';
 
 
@@ -66,7 +66,7 @@ export function AddOfferDialog({ folders, defaultFolderId, offer, onClose, onCre
     setForm({ ...form, [k]: e.target.value });
 
   useEffect(() => {
-    fetch(`${API}/api/offer-options`).then((r) => r.json()).then(setOptions).catch(() => setError('Could not load form options.'));
+    apiFetch(`${API}/api/offer-options`).then((r) => r.json()).then(setOptions).catch(() => setError('Could not load form options.'));
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -86,7 +86,7 @@ export function AddOfferDialog({ folders, defaultFolderId, offer, onClose, onCre
         deadline: form.deadline || null,
       };
       const { status, folder_id, notes, ...posting } = fields;
-      const res = await fetch(editing ? `${API}/api/offers/${offer.id}` : `${API}/api/offers`, {
+      const res = await apiFetch(editing ? `${API}/api/offers/${offer.id}` : `${API}/api/offers`, {
         method: editing ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editing ? posting : { ...fields, folder_id: folder_id || null }),

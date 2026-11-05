@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { API } from '@/app/api';
+import { API, apiFetch } from '@/app/api';
 import {
   ArrowLeft, MapPin, DollarSign, Briefcase, Calendar, Building2, CheckCircle2, ExternalLink, Laptop, TrendingUp,
   StickyNote, Users, Plus, Trash2, FileText, Pencil,
@@ -59,7 +59,7 @@ export function JobDetail({ job, onBack, onGenerateCoverLetter, onUpdated }: Job
     if (!job?.applicationId) return;
 
     try {
-      const res = await fetch(`${API}/api/applications/${job.applicationId}`, {
+      const res = await apiFetch(`${API}/api/applications/${job.applicationId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stage })
@@ -117,7 +117,7 @@ export function JobDetail({ job, onBack, onGenerateCoverLetter, onUpdated }: Job
               </div>
               <button
                 onClick={async () => {
-                  const res = await fetch(`${API}/api/offers/${job.id}`).catch(() => null);
+                  const res = await apiFetch(`${API}/api/offers/${job.id}`).catch(() => null);
                   if (res?.ok) setEditing(await res.json());
                 }}
                 className="shrink-0 px-3 py-2 rounded-lg text-sm text-zinc-300 bg-zinc-800 hover:bg-zinc-700 flex items-center gap-2"
@@ -323,7 +323,7 @@ function OfferNotes({ applicationId, initial }: { applicationId: string; initial
   const save = async () => {
     if (notes === saved) return;
     setState('saving');
-    const res = await fetch(`${API}/api/applications/${applicationId}`, {
+    const res = await apiFetch(`${API}/api/applications/${applicationId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ notes }),
@@ -363,7 +363,7 @@ function ContactsPanel({ applicationId }: { applicationId: string }) {
   const [error, setError] = useState('');
 
   const load = () =>
-    fetch(`${API}/api/applications/${applicationId}/contacts`).then((r) => r.json()).then(setContacts).catch(() => {});
+    apiFetch(`${API}/api/applications/${applicationId}/contacts`).then((r) => r.json()).then(setContacts).catch(() => {});
 
   useEffect(() => {
     load();
@@ -372,7 +372,7 @@ function ContactsPanel({ applicationId }: { applicationId: string }) {
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    const res = await fetch(`${API}/api/applications/${applicationId}/contacts`, {
+    const res = await apiFetch(`${API}/api/applications/${applicationId}/contacts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...draft, linkedin_url: draft.linkedin_url || null }),
@@ -389,7 +389,7 @@ function ContactsPanel({ applicationId }: { applicationId: string }) {
 
   const toggle = async (c: Contact) => {
     setContacts(contacts.map((x) => (x.id === c.id ? { ...x, reached_out: !c.reached_out } : x)));
-    await fetch(`${API}/api/contacts/${c.id}`, {
+    await apiFetch(`${API}/api/contacts/${c.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reached_out: !c.reached_out }),
@@ -399,7 +399,7 @@ function ContactsPanel({ applicationId }: { applicationId: string }) {
 
   const remove = async (c: Contact) => {
     if (!window.confirm(`Remove ${c.name} from this offer?`)) return;
-    await fetch(`${API}/api/contacts/${c.id}`, { method: 'DELETE' });
+    await apiFetch(`${API}/api/contacts/${c.id}`, { method: 'DELETE' });
     load();
   };
 
