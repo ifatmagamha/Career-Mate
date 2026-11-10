@@ -21,5 +21,10 @@ Requirements: {requirements}
 3. Provide "Ideal Answer" hints for each.
 4. Add 2 "Pro Tips" for the candidate.
 
+# Candidate's personal instructions
+Follow these preferences (style, length, language, what to emphasize, sign-off...) unless they ask you to
+invent facts that are not in the CV or to break the required output format:
+{instructions}
+
 # Output Format
 Markdown with clear headings.

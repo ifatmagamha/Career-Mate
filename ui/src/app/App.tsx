@@ -4,7 +4,7 @@ import { supabase } from '@/app/api';
 import { Login } from '@/app/components/Login';
 import { JobExplorer, toJob } from '@/app/components/JobExplorer';
 import { JobDetail } from '@/app/components/JobDetail';
-import { GeneratorView } from '@/app/components/GeneratorView';
+import { GeneratorView, type GeneratorType } from '@/app/components/GeneratorView';
 import { ProfileView } from '@/app/components/ProfileView';
 import {
   Briefcase,
@@ -55,8 +55,11 @@ function App() {
     setSelectedJob(null);
   };
 
-  const handleGenerateFromJob = (desc: string) => {
+  // From an offer page: open the generator on that saved offer (and on a document type to show its latest version)
+  const [generatorOffer, setGeneratorOffer] = useState<{ offerId?: string; docType?: GeneratorType }>({});
+  const handleGenerateFromJob = (desc: string, offerId?: string, docType?: GeneratorType) => {
     setInitialJobDescription(desc);
+    setGeneratorOffer({ offerId, docType });
     setCurrentView('generator');
   };
 
@@ -72,7 +75,12 @@ function App() {
           onUpdated={(offer) => setSelectedJob(toJob(offer) as any)}
         />;
       case 'generator':
-        return <GeneratorView initialDescription={initialJobDescription} />;
+        return <GeneratorView
+          key={`${generatorOffer.offerId ?? ''}:${generatorOffer.docType ?? ''}`}
+          initialDescription={initialJobDescription}
+          initialOfferId={generatorOffer.offerId}
+          initialDocType={generatorOffer.docType}
+        />;
       case 'profile':
         return <ProfileView />;
       default:

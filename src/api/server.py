@@ -102,24 +102,75 @@ def save_profile(profile_data: dict, uid: str = User):
     return {"status": "success", "message": "Profile updated successfully"}
 
 
+class PreferencesIn(BaseModel):
+    instructions: str = Field(default="", max_length=db.MAX_INSTRUCTIONS_CHARS)
+
+
+@app.get("/api/preferences")
+def get_preferences(uid: str = User):
+    with db.connection() as conn:
+        return {"instructions": db.get_instructions(conn, uid)}
+
+
+@app.put("/api/preferences")
+def put_preferences(req: PreferencesIn, uid: str = User):
+    with db.connection() as conn:
+        return {"instructions": db.save_instructions(conn, uid, req.instructions)}
+
+
+def _writer_offer(o: dict):
+    """A saved offer in the shape the writer expects (no extra model call: it is already structured)."""
+    from src.schemas.job_offer import OfferAnalyzed
+    return OfferAnalyzed(url=o["url"] or "https://internal.app", title=o["title"], company=o["company"],
+                         location=o["location"], skills=o["skills"], missions=o["missions"],
+                         requirements=o["requirements"], summary=o["summary"])
+
+
 @app.post("/api/generate")
 def generate_content(payload: dict, uid: str = User):
-    """Tailored content (cover letter, cold email, interview prep): analyze the job text, then write from the profile."""
+    """Tailored content (cover letter, cold email, interview prep), written from the profile.
+
+    With `offer_id`: written for that saved offer and stored on it as a new version (returned as `document`).
+    Otherwise from a pasted `job_description`, analyzed first, and not stored.
+    `instructions` overrides the saved personal instructions for this generation only.
+    """
     from src.agents.analyzer import analyze_offer_llm, heuristic_analyze_offer
-    from src.agents.writer import generate_documents
+    from src.agents.writer import DOC_TYPES, generate_documents
     from src.ingestion.resume_parser import load_saved_profile
+    from src.llm.port import llm, prompt_version
     from src.schemas.job_offer import OfferRaw
+    from src.utils.prompts import load_prompt
 
     doc_type = payload.get("type", "cover-letter")
     raw_jd = payload.get("job_description", "")
     extra = payload.get("extra", "professional")
-    if not raw_jd:
+    offer_id = payload.get("offer_id")
+    if doc_type not in DOC_TYPES:
+        raise HTTPException(status_code=422, detail=f"type must be one of {', '.join(DOC_TYPES)}")
+    if not raw_jd and not offer_id:
         raise HTTPException(status_code=400, detail="Job description required.")
 
     with db.connection() as conn:
         candidate = load_saved_profile(conn, uid)
+        instructions = payload.get("instructions")
+        if instructions is None:
+            instructions = db.get_instructions(conn, uid)
+        offer = db.get_offer(conn, uid, offer_id) if offer_id else None
+    instructions = str(instructions)[:db.MAX_INSTRUCTIONS_CHARS]
     if not candidate:
         raise HTTPException(status_code=400, detail="No profile found. Please upload a CV first.")
+
+    if offer_id:
+        if not offer:
+            raise HTTPException(status_code=404, detail="Offer not found")
+        content = generate_documents(candidate, _writer_offer(offer), doc_type=doc_type, extra=extra,
+                                     instructions=instructions)
+        template = {"cover-letter": "writer_letter", "cold-email": "writer_email", "interview": "writer_interview"}[doc_type]
+        with db.connection() as conn:
+            document = db.add_document(conn, uid, offer["id"], doc_type, content,
+                                       settings={"extra": extra, "instructions": instructions},
+                                       model=llm.config("write").model, prompt_version=prompt_version(load_prompt(template)))
+        return {"status": "success", "content": content, "document": document}
 
     # Use the first line as the title if it is short
     initial_title = "Target Position"
@@ -137,7 +188,57 @@ def generate_content(payload: dict, uid: str = User):
         logger.warning(f"Generator flow: LLM analysis failed, falling back to heuristic. Error: {e}")
         analyzed_offer = heuristic_analyze_offer(temp_offer)
 
-    return {"status": "success", "content": generate_documents(candidate, analyzed_offer, doc_type=doc_type, extra=extra)}
+    return {"status": "success", "content": generate_documents(candidate, analyzed_offer, doc_type=doc_type, extra=extra,
+                                                               instructions=instructions)}
+
+
+@app.get("/api/offers/{offer_id}/documents")
+def get_documents(offer_id: str, type: Optional[str] = None, uid: str = User):
+    """Every saved version for the offer, newest first."""
+    with db.connection() as conn:
+        if not db.get_offer(conn, uid, offer_id):
+            raise HTTPException(status_code=404, detail="Offer not found")
+        return db.list_documents(conn, uid, offer_id, type)
+
+
+class RevisionIn(BaseModel):
+    """Either `feedback` (the AI rewrites the document) or `content` (your own edit), saved as a new version."""
+    feedback: Optional[str] = Field(default=None, max_length=2000)
+    content: Optional[str] = Field(default=None, max_length=50000)
+
+
+@app.post("/api/documents/{document_id}/revise", status_code=201)
+def revise(document_id: str, req: RevisionIn, uid: str = User):
+    from src.agents.writer import revise_document
+    from src.ingestion.resume_parser import load_saved_profile
+    from src.llm.port import LLMError, llm, prompt_version
+    from src.utils.prompts import load_prompt
+
+    feedback, content = (req.feedback or "").strip(), (req.content or "").strip()
+    if bool(feedback) == bool(content):
+        raise HTTPException(status_code=422, detail="Send either feedback or content")
+    with db.connection() as conn:
+        current = db.get_document(conn, uid, document_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="Document not found")
+        offer = db.get_offer(conn, uid, current["offer_id"])
+        candidate = load_saved_profile(conn, uid) if feedback else None
+        instructions = db.get_instructions(conn, uid)
+
+    settings, model, version = {**current["settings"], "instructions": instructions}, None, None
+    if feedback:
+        if not candidate:
+            raise HTTPException(status_code=400, detail="No profile found. Please upload a CV first.")
+        try:  # the model call happens without holding a DB connection
+            content = revise_document(candidate, _writer_offer(offer), current["doc_type"], current["content"],
+                                      feedback, instructions)
+        except (LLMError, ValueError) as e:  # nothing is saved when the model fails
+            raise HTTPException(status_code=503, detail=f"Could not revise the document: {str(e)[:200]}")
+        model, version = llm.config("write").model, prompt_version(load_prompt("writer_revise"))
+    with db.connection() as conn:
+        return db.add_document(conn, uid, current["offer_id"], current["doc_type"], content, parent_id=current["id"],
+                               feedback=feedback or "Edited by hand", settings=settings, model=model,
+                               prompt_version=version, actor="ai" if feedback else "user")
 
 
 # --- Applications ---

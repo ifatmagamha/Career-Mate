@@ -5,6 +5,51 @@ import {
   StickyNote, Users, Plus, Trash2, FileText, Pencil,
 } from 'lucide-react';
 import { AddOfferDialog } from '@/app/components/AddOfferDialog';
+import type { GeneratorType } from '@/app/components/GeneratorView';
+
+const DOC_LABELS: Record<GeneratorType, string> = {
+  'cover-letter': 'Cover letter', 'cold-email': 'Cold email', 'interview': 'Interview prep',
+};
+
+// Documents generated for this offer: latest version of each type, opened in the AI Generator to iterate
+function DocumentsPanel({ offerId, onOpen }: { offerId: string; onOpen: (docType: GeneratorType) => void }) {
+  const [docs, setDocs] = useState<{ doc_type: GeneratorType; version: number; created_at: string }[] | null>(null);
+
+  useEffect(() => {
+    apiFetch(`${API}/api/offers/${offerId}/documents`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setDocs)
+      .catch(() => setDocs([]));
+  }, [offerId]);
+
+  // The API lists newest first per type: the first row of each type is its latest version
+  const latest = (docs || []).filter((d, i, all) => all.findIndex((x) => x.doc_type === d.doc_type) === i);
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+      <h2 className="text-lg font-semibold mb-1 flex items-center gap-2"><FileText className="w-4 h-4" />Documents</h2>
+      {docs === null ? (
+        <p className="text-sm text-zinc-500">Loading…</p>
+      ) : latest.length === 0 ? (
+        <p className="text-sm text-zinc-500">No documents yet. Use “Generate Cover Letter” to write one for this offer.</p>
+      ) : (
+        <ul className="space-y-2 mt-3">
+          {latest.map((d) => (
+            <li key={d.doc_type}>
+              <button onClick={() => onOpen(d.doc_type)}
+                className="w-full text-left px-3 py-2 rounded-lg border border-zinc-800 hover:border-zinc-600">
+                <span className="font-medium">{DOC_LABELS[d.doc_type] ?? d.doc_type}</span>
+                <span className="block text-xs text-zinc-500">
+                  v{d.version} · {new Date(d.created_at).toLocaleDateString()} · open to revise
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 const label = (s?: string) => (s && s !== 'unknown' ? (s.charAt(0).toUpperCase() + s.slice(1)).replace('_', ' ') : 'Not specified');
 
@@ -46,7 +91,7 @@ interface Contact {
 interface JobDetailProps {
   job: Job | null;
   onBack: () => void;
-  onGenerateCoverLetter: (description: string) => void;
+  onGenerateCoverLetter: (description: string, offerId?: string, docType?: GeneratorType) => void;
   onUpdated?: (offer: any) => void;
 }
 
@@ -273,7 +318,7 @@ export function JobDetail({ job, onBack, onGenerateCoverLetter, onUpdated }: Job
                 {status === 'applied' ? 'Applied' : 'Mark as Applied'}
               </button>
               <button
-                onClick={() => onGenerateCoverLetter(job.description)}
+                onClick={() => onGenerateCoverLetter(job.description, job.id)}
                 className="w-full py-3 bg-zinc-800 text-white rounded-lg font-medium hover:bg-zinc-700 transition-colors"
               >
                 Generate Cover Letter
@@ -292,6 +337,7 @@ export function JobDetail({ job, onBack, onGenerateCoverLetter, onUpdated }: Job
             </div>
           </div>
 
+          <DocumentsPanel offerId={job.id} onOpen={(docType) => onGenerateCoverLetter(job.description, job.id, docType)} />
           {job.applicationId && <OfferNotes applicationId={job.applicationId} initial={job.notes || ''} />}
           {job.applicationId && <ContactsPanel applicationId={job.applicationId} />}
         </div>

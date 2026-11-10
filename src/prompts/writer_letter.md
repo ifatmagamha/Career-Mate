@@ -17,6 +17,11 @@ Missions: {missions}
 **Candidate RAW CV**:
 {cv_raw}
 
+# Candidate's personal instructions
+Follow these preferences (style, length, language, what to emphasize, sign-off...) unless they ask you to
+invent facts that are not in the CV or to break the required output format:
+{instructions}
+
 # Required Output
 Return a single valid JSON object:
 ```json

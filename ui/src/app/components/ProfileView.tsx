@@ -18,6 +18,7 @@ const stageLabel = (s: string) => (s.charAt(0).toUpperCase() + s.slice(1)).repla
 export function ProfileView() {
   const [loading, setLoading] = useState(false);
   const [activeProfile, setActiveProfile] = useState<any>(null);
+  const [loadError, setLoadError] = useState(false);
   const [activeTab, setActiveTab] = useState<'profile' | 'applications'>('profile');
 
   const [applications, setApplications] = useState<Application[]>([]);
@@ -34,11 +35,14 @@ export function ProfileView() {
 
   const fetchProfile = async () => {
     try {
+      setLoadError(false);
       const res = await apiFetch(`${API}/api/profile/current`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setActiveProfile(data);
     } catch (e) {
       console.error("Failed to fetch profile", e);
+      setLoadError(true);
     }
   };
 
@@ -60,7 +64,15 @@ export function ProfileView() {
     console.log("Active Profile Data:", activeProfile);
   }, [activeProfile]);
 
-  if (!activeProfile) return <div className="p-8 text-center">Loading profile...</div>;
+  if (!activeProfile) {
+    if (!loadError) return <div className="p-8 text-center">Loading profile...</div>;
+    return (
+      <div role="alert" className="p-8 text-center">
+        <p className="text-red-400 mb-4">Could not load your profile: the server did not respond.</p>
+        <button onClick={fetchProfile} className="px-4 py-2 bg-white text-black rounded-lg font-medium hover:bg-zinc-200">Try again</button>
+      </div>
+    );
+  }
 
   const hasProfile = (activeProfile.name && activeProfile.name.length > 0) ||
     (activeProfile.email && activeProfile.email.length > 0) ||
