@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { supabase } from '@/app/api';
+import { API, apiFetch, supabase } from '@/app/api';
+import { AssistantPanel, type AssistantContext } from '@/app/components/AssistantPanel';
+import { CompaniesView } from '@/app/components/CompaniesView';
+import { MessagesView } from '@/app/components/MessagesView';
 import { Login } from '@/app/components/Login';
 import { JobExplorer, toJob } from '@/app/components/JobExplorer';
 import { JobDetail } from '@/app/components/JobDetail';
@@ -11,10 +14,12 @@ import {
   FileText,
   User,
   Sparkles,
-  LogOut
+  LogOut,
+  Building2,
+  MessageSquare
 } from 'lucide-react';
 
-type View = 'jobs' | 'generator' | 'profile' | 'jobDetail';
+type View = 'jobs' | 'generator' | 'profile' | 'jobDetail' | 'companies' | 'messages';
 
 interface Job {
   id: string;
@@ -63,16 +68,47 @@ function App() {
     setCurrentView('generator');
   };
 
+  // Company directory, opened from the nav or from an offer page (on that company's file)
+  const [companyId, setCompanyId] = useState('');
+  const openCompany = (id: string) => {
+    setCompanyId(id);
+    setCurrentView('companies');
+  };
+
+  // Messages, opened from the nav or from a contact on an offer page (draft for that offer and contact)
+  const [messageTarget, setMessageTarget] = useState<{ offerId?: string; contactId?: string }>({});
+  const openMessages = (offerId = '', contactId = '') => {
+    setMessageTarget({ offerId, contactId });
+    setCurrentView('messages');
+  };
+
+  // The assistant talks about the offer on screen, otherwise about the profile
+  const assistantContext: AssistantContext = currentView === 'jobDetail' && selectedJob
+    ? { kind: 'offer', offerId: selectedJob.id, title: selectedJob.title }
+    : { kind: 'profile' };
+
+  // After a change confirmed in the assistant: reload the offer and remount its page (status, notes, contacts, documents)
+  const [detailVersion, setDetailVersion] = useState(0);
+  const refreshSelectedJob = async () => {
+    if (!selectedJob) return;
+    const res = await apiFetch(`${API}/api/offers/${selectedJob.id}`).catch(() => null);
+    if (res?.ok) setSelectedJob(toJob(await res.json()) as any);
+    setDetailVersion((v) => v + 1);
+  };
+
   const renderView = () => {
     switch (currentView) {
       case 'jobs':
         return <JobExplorer onJobSelect={handleJobSelect} />;
       case 'jobDetail':
         return <JobDetail
+          key={`${selectedJob?.id}:${detailVersion}`}
           job={selectedJob}
           onBack={handleBackToJobs}
           onGenerateCoverLetter={handleGenerateFromJob}
           onUpdated={(offer) => setSelectedJob(toJob(offer) as any)}
+          onOpenCompany={openCompany}
+          onWriteMessage={openMessages}
         />;
       case 'generator':
         return <GeneratorView
@@ -83,6 +119,11 @@ function App() {
         />;
       case 'profile':
         return <ProfileView />;
+      case 'messages':
+        return <MessagesView key={`${messageTarget.offerId}:${messageTarget.contactId}`}
+          initialOfferId={messageTarget.offerId} initialContactId={messageTarget.contactId} />;
+      case 'companies':
+        return <CompaniesView key={companyId} initialCompanyId={companyId} onOpenOffer={(o) => handleJobSelect(toJob(o) as any)} />;
       default:
         return <JobExplorer onJobSelect={handleJobSelect} />;
     }
@@ -97,13 +138,17 @@ function App() {
       <nav className="border-b border-zinc-800 bg-black/50 backdrop-blur-sm fixed top-0 left-0 right-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            {/* Logo */}
-            <div className="flex items-center gap-2">
+            {/* Logo: back to the main page (Job Explorer) */}
+            <button
+              onClick={handleBackToJobs}
+              aria-label="Career Mate AI, go to the Job Explorer"
+              className="flex items-center gap-2 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 hover:opacity-90"
+            >
               <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-blue-500 rounded-lg flex items-center justify-center">
                 <Sparkles className="w-5 h-5 text-white" />
               </div>
               <span className="text-xl font-semibold">Career Mate AI</span>
-            </div>
+            </button>
 
             {/* Navigation Tabs */}
             <div className="flex items-center gap-2">
@@ -125,6 +170,18 @@ function App() {
                 active={currentView === 'profile'}
                 onClick={() => setCurrentView('profile')}
               />
+              <NavButton
+                icon={<Building2 className="w-4 h-4" />}
+                label="Companies"
+                active={currentView === 'companies'}
+                onClick={() => openCompany('')}
+              />
+              <NavButton
+                icon={<MessageSquare className="w-4 h-4" />}
+                label="Messages"
+                active={currentView === 'messages'}
+                onClick={() => openMessages()}
+              />
               {supabase && session && (
                 <button
                   onClick={() => supabase!.auth.signOut()}
@@ -144,6 +201,8 @@ function App() {
       <main className="pt-16">
         {renderView()}
       </main>
+
+      <AssistantPanel context={assistantContext} onDataChanged={refreshSelectedJob} />
     </div>
   );
 }

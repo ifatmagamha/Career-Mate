@@ -34,7 +34,9 @@ npm --prefix ui run dev                # http://localhost:5173
 
 **Profile**: upload your CV (PDF or text). The file and the parsed, editable profile are stored with your account in the database.
 
-**AI Generator**: cover letters, emails and interview preparation based on an offer and your profile.
+**AI Generator**: cover letters, emails and interview preparation based on an offer and your profile, following your saved personal instructions (language, length, sign-off…). Documents generated for a saved offer are kept on it as versions: revise one with feedback, or edit it by hand, and every change is a new version.
+
+**Assistant** (✨ button or Ctrl+K, on every page): a chat about the offer on screen, or about your profile elsewhere. It sees the offer, your CV, notes and saved documents (attach one with 📎). It can propose changes (status, a note, a contact, a new document version), applied only when you click Confirm. Each offer keeps its own conversation.
 
 ---
 
@@ -64,6 +66,7 @@ All model calls go through **LLMPort** (`src/llm/port.py`), a single client for 
 | `extract` | reading offers, parsing CVs |
 | `write` | letters, emails, interview prep |
 | `query` | turning a plain-language search into filters |
+| `agent` | the assistant pop-up (tool calling) |
 | `embed` | embeddings for meaning-based search |
 
 `config/models.toml` is the only place model names live. `[defaults]` switches every role at once (default: `openai/gpt-oss-120b` on Groq through the Hugging Face router); a role can pin its own model (embeddings stay on `gemini-embedding-001`); env vars (`LLM_DEFAULT_MODEL`, `LLM_<ROLE>_MODEL`) override without editing. A new provider is one `[providers.<name>]` block.

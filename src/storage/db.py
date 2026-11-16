@@ -77,6 +77,17 @@ def connect(url: str | None = None, schema: str | None = None) -> psycopg.Connec
     return conn
 
 
+POOL_TIMEOUT_S = 10            # a request waits this long for a free connection, then gets a 503
+IDLE_IN_TRANSACTION_S = 60     # Postgres ends an API transaction left open this long (e.g. code waiting on a model)
+
+
+def _configure_api_connection(conn: psycopg.Connection) -> None:
+    """New pooled connections: app schema, and a server-side guard against transactions left open.
+    (Not applied to CLI connections: `reindex` may legitimately keep one open while embedding.)"""
+    conn.execute(f"SET idle_in_transaction_session_timeout = '{IDLE_IN_TRANSACTION_S}s'")
+    _set_search_path(conn, settings.DB_SCHEMA)
+
+
 _pool = None
 _pool_lock = threading.Lock()  # the first requests arrive together, in different threads: create one pool only
 
@@ -91,7 +102,8 @@ def pool():
             _pool = ConnectionPool(
                 settings.DATABASE_URL, min_size=1, max_size=5, open=True,
                 kwargs={"row_factory": _row_factory, "prepare_threshold": None},
-                configure=lambda c: _set_search_path(c, settings.DB_SCHEMA),
+                configure=_configure_api_connection,
+                timeout=POOL_TIMEOUT_S,
             )
             atexit.register(close_pool)  # CLI/scripts: close before Python shuts its threads down
     return _pool
@@ -293,6 +305,19 @@ def update_offer(conn, user_id: str, offer_id: str, changes: Dict[str, Any], *, 
         log_event(conn, user_id, "offer.edited", actor=actor, offer_id=offer["id"],
                   application_id=offer["application_id"], payload={"fields": changed})
     return get_offer(conn, user_id, offer_id)
+
+
+def delete_offer(conn, user_id: str, offer_id: str) -> bool:
+    """Delete the offer with everything attached to it (application, contacts, documents, embedding, assistant
+    conversation: ON DELETE CASCADE). The history keeps an 'offer.deleted' event with the title."""
+    offer = get_offer(conn, user_id, offer_id)
+    if not offer:
+        return False
+    with conn.transaction():
+        log_event(conn, user_id, "offer.deleted", actor="user", offer_id=offer["id"],
+                  payload={"title": offer["title"], "company": offer["company"], "status": offer["status"]})
+        conn.execute("DELETE FROM offers WHERE id = %s AND user_id = %s", (offer["id"], user_id))
+    return True
 
 
 # --- search, filters, sort -------------------------------------------------------------------------------
@@ -687,6 +712,18 @@ if __name__ == "__main__":
         assert get_document(c, V, d1["id"]) is None and list_documents(c, V, o["id"]) == []
         assert get_document(c, U, d1["id"])["content"] == "Draft 1"
         assert c.execute("SELECT count(*) n FROM events WHERE type = 'document.created'").fetchone()["n"] == 3
+
+        # delete: only your own offer, with everything attached; the history keeps a note
+        add_contact(c, U, o["application_id"], {"name": "Kim"})
+        assert not delete_offer(c, V, o["id"]) and get_offer(c, U, o["id"])                # V can't delete U's offer
+        assert delete_offer(c, U, o["id"]) and get_offer(c, U, o["id"]) is None
+        assert not delete_offer(c, U, o["id"]) and not delete_offer(c, U, "not-a-uuid")
+        for table in ("applications", "contacts", "documents"):
+            n = c.execute(f"SELECT count(*) n FROM {table} WHERE user_id = %s", (U,)).fetchone()["n"]
+            assert n == 0, (table, n)
+        gone = c.execute("SELECT offer_id, payload FROM events WHERE type = 'offer.deleted'").fetchone()
+        assert gone["offer_id"] is None and gone["payload"]["title"] == "Data Eng"
+        assert get_offer(c, V, vo["id"])                                                    # V's offer untouched
 
     # --- edits, normalization, search, filters, views ---
     with temp_schema() as s:

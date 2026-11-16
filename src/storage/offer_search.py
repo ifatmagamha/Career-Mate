@@ -80,28 +80,41 @@ def _vec(v: Sequence[float]) -> str:
     return "[" + ",".join(str(float(x)) for x in v) + "]"
 
 
-def ensure_embeddings(conn, user_id: str, *, embed: Embed = _default_embed, model: Optional[str] = None) -> int:
-    """Embed the user's offers that are new, edited, or embedded with another model. Returns how many were (re)embedded."""
-    model = model or _embed_model()
+def pending_embeddings(conn, user_id: str, model: str) -> List[Tuple[str, str]]:
+    """(offer_id, text) of the user's offers that are new, edited, or embedded with another model."""
     stored = {r["offer_id"]: (r["model"], r["text_hash"])
               for r in conn.execute("SELECT offer_id, model, text_hash FROM offer_embeddings WHERE user_id = %s", (user_id,))}
-    todo = []
-    for offer in db.list_offers(conn, user_id):
-        text = offer_text(offer)
-        if stored.get(offer["id"]) != (model, _hash(text)):
-            todo.append((offer["id"], text))
+    return [(o["id"], text) for o in db.list_offers(conn, user_id)
+            if stored.get(o["id"]) != (model, _hash(text := offer_text(o)))]
+
+
+def compute_embeddings(todo: List[Tuple[str, str]], embed: Embed) -> List[List[float]]:
+    """The slow part (a call to the provider): run it while holding NO database connection."""
+    vectors: List[List[float]] = []
     for i in range(0, len(todo), EMBED_BATCH):
-        batch = todo[i : i + EMBED_BATCH]
-        vectors = embed([t for _, t in batch])
-        with conn.transaction(), conn.cursor() as cur:
-            cur.executemany(
-                "INSERT INTO offer_embeddings (offer_id, user_id, model, text_hash, embedding) VALUES (%s, %s, %s, %s, %s::vector) "
-                "ON CONFLICT (offer_id) DO UPDATE SET model = EXCLUDED.model, text_hash = EXCLUDED.text_hash, "
-                "embedding = EXCLUDED.embedding, updated_at = now()",
-                [(oid, user_id, model, _hash(t), _vec(v)) for (oid, t), v in zip(batch, vectors)],
-            )
-    if todo:
-        logger.info(f"[search] embedded {len(todo)} offer(s) with {model}")
+        vectors += embed([t for _, t in todo[i : i + EMBED_BATCH]])
+    return vectors
+
+
+def store_embeddings(conn, user_id: str, model: str, todo: List[Tuple[str, str]], vectors: List[List[float]]) -> None:
+    if not todo:
+        return
+    with conn.transaction(), conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO offer_embeddings (offer_id, user_id, model, text_hash, embedding) VALUES (%s, %s, %s, %s, %s::vector) "
+            "ON CONFLICT (offer_id) DO UPDATE SET model = EXCLUDED.model, text_hash = EXCLUDED.text_hash, "
+            "embedding = EXCLUDED.embedding, updated_at = now()",
+            [(oid, user_id, model, _hash(t), _vec(v)) for (oid, t), v in zip(todo, vectors)],
+        )
+    logger.info(f"[search] embedded {len(todo)} offer(s) with {model}")
+
+
+def ensure_embeddings(conn, user_id: str, *, embed: Embed = _default_embed, model: Optional[str] = None) -> int:
+    """Embed new or changed offers using one connection throughout (fine for the CLI `reindex`; the API instead
+    releases its connection during the provider call, see search_offers). Returns how many were (re)embedded."""
+    model = model or _embed_model()
+    todo = pending_embeddings(conn, user_id, model)
+    store_embeddings(conn, user_id, model, todo, compute_embeddings(todo, embed))
     return len(todo)
 
 
@@ -144,31 +157,44 @@ def rrf(*rankings: Sequence[str], k: int = RRF_K) -> Dict[str, float]:
     return scores
 
 
-def search_offers(conn, user_id: str, filters: Dict[str, Any], *, mode: str = "hybrid",
+def search_offers(connection: Callable, user_id: str, filters: Dict[str, Any], *, mode: str = "hybrid",
                   embed: Embed = _default_embed, model: Optional[str] = None) -> Tuple[List[Dict[str, Any]], str]:
-    """Returns (offers, mode actually used). Without a query, this is plain filtering/sorting."""
+    """Returns (offers, mode actually used). Without a query, this is plain filtering/sorting.
+
+    `connection` opens a short-lived DB connection (db.connection in the API). The embedding provider can take
+    minutes when rate-limited, so no connection is held while it is called: read, release, embed, then reconnect
+    to store and rank. Holding one during the call let a few searches exhaust the pool and block every request.
+    """
     q = (filters.get("q") or "").strip()
-    if not q or mode == "keyword":
-        return db.query_offers(conn, user_id, filters), "keyword" if q else "none"
     if mode not in MODES:
         raise ValueError(f"Unknown search mode: {mode}")
-
-    # Everything that passes the filters, in the requested order (used for explicit sorts and as the candidate set)
-    explicit_sort = filters.get("sort") not in (None, "", "relevance")
-    candidates = db.query_offers(conn, user_id, {**filters, "q": None, "sort": filters.get("sort") if explicit_sort else None})
+    with connection() as conn:
+        if not q or mode == "keyword":
+            return db.query_offers(conn, user_id, filters), "keyword" if q else "none"
+        # Everything that passes the filters, in the requested order (used for explicit sorts and as the candidate set)
+        explicit_sort = filters.get("sort") not in (None, "", "relevance")
+        candidates = db.query_offers(conn, user_id, {**filters, "q": None, "sort": filters.get("sort") if explicit_sort else None})
+        keyword_ids = [o["id"] for o in db.query_offers(conn, user_id, {**filters, "sort": "relevance"})] if mode == "hybrid" else []
+        try:
+            model = model or _embed_model()
+            todo = pending_embeddings(conn, user_id, model)
+        except Exception as e:
+            logger.warning(f"[search] semantic search unavailable, keyword only: {str(e)[:200]}")
+            return db.query_offers(conn, user_id, filters), "keyword (semantic unavailable)"
     by_id = {o["id"]: o for o in candidates}
-    keyword_ids = [o["id"] for o in db.query_offers(conn, user_id, {**filters, "sort": "relevance"})] if mode == "hybrid" else []
 
     try:
-        model = model or _embed_model()
         floor, margin = _thresholds()
-        with conn.transaction():  # a DB error here rolls back to this point, so the keyword fallback still runs
-            ensure_embeddings(conn, user_id, embed=embed, model=model)
+        vectors = compute_embeddings(todo, embed)   # no connection held: these may be slow
+        _query_vector(model, q, embed)              # cached, so semantic_ranking below makes no network call
+        with connection() as conn:
+            store_embeddings(conn, user_id, model, todo, vectors)
             dense_ids = [oid for oid, _ in semantic_ranking(conn, user_id, q, list(by_id), embed=embed, model=model,
                                                              min_similarity=floor, margin=margin)]
     except Exception as e:  # quota, missing key, provider down: keyword search still works
         logger.warning(f"[search] semantic search unavailable, keyword only: {str(e)[:200]}")
-        return db.query_offers(conn, user_id, filters), "keyword (semantic unavailable)"
+        with connection() as conn:
+            return db.query_offers(conn, user_id, filters), "keyword (semantic unavailable)"
 
     scores = rrf(keyword_ids, dense_ids)
     if explicit_sort:
@@ -192,15 +218,29 @@ def _selftest() -> None:
     topics = ["data", "sales", "design", "machine"]
     calls = []
 
+    held = []  # open connections right now: must be empty whenever the (slow) provider is called
+
     def fake_embed(texts):
+        assert not held, "a database connection is held during the embedding call"
         calls.append(len(texts))
         return [[float(t.lower().count(w)) + 0.01 for w in topics] for t in texts]
 
     def broken(texts):
+        assert not held, "a database connection is held during the embedding call"
         raise RuntimeError("quota")
 
     U, V = str(uuid.uuid4()), str(uuid.uuid4())
+    from contextlib import contextmanager
+
     with db.temp_schema() as c:
+        @contextmanager
+        def conn_():
+            held.append(1)
+            try:
+                yield c
+            finally:
+                held.pop()
+
         a = db.insert_offer(c, U, {"title": "Data Engineer", "summary": "data pipelines and data quality"})
         b = db.insert_offer(c, U, {"title": "Account Executive", "summary": "sales sales pipeline"})
         db.insert_offer(c, U, {"title": "Product Designer", "summary": "design systems"}, status="applied")
@@ -212,25 +252,25 @@ def _selftest() -> None:
         assert ensure_embeddings(c, U, embed=fake_embed, model="fake-v2") == 3          # model change: all
 
         _query_vector.cache_clear()
-        res, mode = search_offers(c, U, {"q": "datas"}, embed=fake_embed, model="fake-v2")
+        res, mode = search_offers(conn_, U, {"q": "datas"}, embed=fake_embed, model="fake-v2")
         assert mode == "hybrid" and res[0]["id"] == a["id"], [o["title"] for o in res]  # semantic finds what keyword misses
         assert "Product Designer" not in [o["title"] for o in res]                       # unrelated: below MIN_SIMILARITY
 
-        res, _ = search_offers(c, U, {"q": "datas", "status": ["applied"]}, embed=fake_embed, model="fake-v2")
+        res, _ = search_offers(conn_, U, {"q": "datas", "status": ["applied"]}, embed=fake_embed, model="fake-v2")
         assert res == []                                                                  # filters still apply
 
-        res, mode = search_offers(c, U, {"q": "pipeline"}, mode="keyword", embed=fake_embed, model="fake-v2")
+        res, mode = search_offers(conn_, U, {"q": "pipeline"}, mode="keyword", embed=fake_embed, model="fake-v2")
         assert mode == "keyword" and [o["title"] for o in res] == ["Data Engineer"]  # prefix: "pipeline" matches "pipelines"
 
         _query_vector.cache_clear()
-        res, mode = search_offers(c, U, {"q": "designer"}, embed=broken, model="fake-v3")
+        res, mode = search_offers(conn_, U, {"q": "designer"}, embed=broken, model="fake-v3")
         assert mode.startswith("keyword") and [o["title"] for o in res] == ["Product Designer"]  # graceful fallback
 
-        res, mode = search_offers(c, U, {"status": ["applied"]}, embed=broken)
+        res, mode = search_offers(conn_, U, {"status": ["applied"]}, embed=broken)
         assert mode == "none" and len(res) == 1                                           # no query: no embedding call
         # another user's offers are never embedded or returned
         db.insert_offer(c, V, {"title": "Data Analyst", "summary": "data data data"})
-        res, _ = search_offers(c, U, {"q": "data"}, embed=fake_embed, model="fake-v2")
+        res, _ = search_offers(conn_, U, {"q": "data"}, embed=fake_embed, model="fake-v2")
         assert "Data Analyst" not in [o["title"] for o in res]
         assert c.execute("SELECT count(*) AS n FROM offer_embeddings WHERE user_id = %s", (V,)).fetchone()["n"] == 0
     print("offer_search ok")
