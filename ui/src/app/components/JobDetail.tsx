@@ -5,6 +5,51 @@ import {
   StickyNote, Users, Plus, Trash2, FileText, Pencil,
 } from 'lucide-react';
 import { AddOfferDialog } from '@/app/components/AddOfferDialog';
+import type { GeneratorType } from '@/app/components/GeneratorView';
+
+const DOC_LABELS: Record<GeneratorType, string> = {
+  'cover-letter': 'Cover letter', 'cold-email': 'Cold email', 'interview': 'Interview prep',
+};
+
+// Documents generated for this offer: latest version of each type, opened in the AI Generator to iterate
+function DocumentsPanel({ offerId, onOpen }: { offerId: string; onOpen: (docType: GeneratorType) => void }) {
+  const [docs, setDocs] = useState<{ doc_type: GeneratorType; version: number; created_at: string }[] | null>(null);
+
+  useEffect(() => {
+    apiFetch(`${API}/api/offers/${offerId}/documents`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setDocs)
+      .catch(() => setDocs([]));
+  }, [offerId]);
+
+  // The API lists newest first per type: the first row of each type is its latest version
+  const latest = (docs || []).filter((d, i, all) => all.findIndex((x) => x.doc_type === d.doc_type) === i);
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+      <h2 className="text-lg font-semibold mb-1 flex items-center gap-2"><FileText className="w-4 h-4" />Documents</h2>
+      {docs === null ? (
+        <p className="text-sm text-zinc-500">Loading…</p>
+      ) : latest.length === 0 ? (
+        <p className="text-sm text-zinc-500">No documents yet. Use “Generate Cover Letter” to write one for this offer.</p>
+      ) : (
+        <ul className="space-y-2 mt-3">
+          {latest.map((d) => (
+            <li key={d.doc_type}>
+              <button onClick={() => onOpen(d.doc_type)}
+                className="w-full text-left px-3 py-2 rounded-lg border border-zinc-800 hover:border-zinc-600">
+                <span className="font-medium">{DOC_LABELS[d.doc_type] ?? d.doc_type}</span>
+                <span className="block text-xs text-zinc-500">
+                  v{d.version} · {new Date(d.created_at).toLocaleDateString()} · open to revise
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 const label = (s?: string) => (s && s !== 'unknown' ? (s.charAt(0).toUpperCase() + s.slice(1)).replace('_', ' ') : 'Not specified');
 
@@ -46,11 +91,59 @@ interface Contact {
 interface JobDetailProps {
   job: Job | null;
   onBack: () => void;
-  onGenerateCoverLetter: (description: string) => void;
+  onGenerateCoverLetter: (description: string, offerId?: string, docType?: GeneratorType) => void;
   onUpdated?: (offer: any) => void;
+  onOpenCompany?: (companyId: string) => void;
+  onWriteMessage?: (offerId: string, contactId: string) => void;
 }
 
-export function JobDetail({ job, onBack, onGenerateCoverLetter, onUpdated }: JobDetailProps) {
+// The company's file from the directory: a glance at your notes and open to-dos, or a button to create it
+function CompanyPanel({ company, onOpen }: { company: string; onOpen: (id: string) => void }) {
+  const [file, setFile] = useState<any | null | undefined>(undefined);
+
+  useEffect(() => {
+    apiFetch(`${API}/api/companies/by-name?name=${encodeURIComponent(company)}`)
+      .then((r) => (r.ok ? r.json() : null)).then(setFile).catch(() => setFile(null));
+  }, [company]);
+
+  const create = async () => {
+    const res = await apiFetch(`${API}/api/companies`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: company }),
+    }).catch(() => null);
+    if (res?.ok) onOpen((await res.json()).id);
+  };
+
+  if (file === undefined) return null;
+  const open = (file?.todos || []).filter((t: any) => !t.done);
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+      <h2 className="text-lg font-semibold mb-1 flex items-center gap-2"><Building2 className="w-4 h-4" />{company}</h2>
+      {file ? (
+        <>
+          {/* notes come pinned first, then newest: show the most important one */}
+          {(() => {
+            const top = (file.notes || []).find((n: any) => n.pinned || n.flag) || (file.notes || [])[0];
+            return top ? (
+              <p className="text-sm text-zinc-400 line-clamp-3 whitespace-pre-wrap">
+                {top.flag && <span className="text-xs uppercase tracking-wide text-amber-400 mr-1">{top.flag}</span>}{top.body}
+              </p>
+            ) : <p className="text-sm text-zinc-500">No notes yet.</p>;
+          })()}
+          {(file.notes || []).length > 1 && <p className="text-xs text-zinc-500 mt-1">{file.notes.length} notes</p>}
+          {open.length > 0 && <p className="text-xs text-zinc-500 mt-2">{open.length} open to-do{open.length === 1 ? '' : 's'}: {open[0].text}{open.length > 1 ? '…' : ''}</p>}
+          <button onClick={() => onOpen(file.id)} className="mt-3 w-full py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sm">Open company file</button>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-zinc-500">No company file yet: keep notes, links and to-dos about {company}.</p>
+          <button onClick={create} className="mt-3 w-full py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sm">Add to my companies</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function JobDetail({ job, onBack, onGenerateCoverLetter, onUpdated, onOpenCompany, onWriteMessage }: JobDetailProps) {
   const [status, setStatus] = useState(job?.status);
   const [editing, setEditing] = useState<any>(null); // raw offer being edited
 
@@ -123,6 +216,19 @@ export function JobDetail({ job, onBack, onGenerateCoverLetter, onUpdated }: Job
                 className="shrink-0 px-3 py-2 rounded-lg text-sm text-zinc-300 bg-zinc-800 hover:bg-zinc-700 flex items-center gap-2"
               >
                 <Pencil className="w-4 h-4" />Edit
+              </button>
+              <button
+                onClick={async () => {
+                  if (!confirm(`Delete “${job.title}”${job.company ? ` at ${job.company}` : ''}?\n\nIts notes, contacts, generated documents and assistant conversation are deleted too. This cannot be undone.`)) return;
+                  const res = await apiFetch(`${API}/api/offers/${job.id}`, { method: 'DELETE' }).catch(() => null);
+                  if (res?.ok || res?.status === 404) onBack(); // 404: already gone
+                  else alert('Could not delete the offer.');
+                }}
+                aria-label="Delete offer"
+                title="Delete offer"
+                className="shrink-0 px-3 py-2 rounded-lg text-sm text-zinc-300 bg-zinc-800 hover:bg-red-950 hover:text-red-300 flex items-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" />Delete
               </button>
               {job.matchScore > 0 && (
                 <div className={`px-4 py-2 rounded-xl bg-gradient-to-r ${getMatchColor(job.matchScore)} text-white font-semibold`}>
@@ -273,7 +379,7 @@ export function JobDetail({ job, onBack, onGenerateCoverLetter, onUpdated }: Job
                 {status === 'applied' ? 'Applied' : 'Mark as Applied'}
               </button>
               <button
-                onClick={() => onGenerateCoverLetter(job.description)}
+                onClick={() => onGenerateCoverLetter(job.description, job.id)}
                 className="w-full py-3 bg-zinc-800 text-white rounded-lg font-medium hover:bg-zinc-700 transition-colors"
               >
                 Generate Cover Letter
@@ -292,8 +398,11 @@ export function JobDetail({ job, onBack, onGenerateCoverLetter, onUpdated }: Job
             </div>
           </div>
 
+          {onOpenCompany && job.company && job.company !== 'Unknown' && <CompanyPanel company={job.company} onOpen={onOpenCompany} />}
+          <DocumentsPanel offerId={job.id} onOpen={(docType) => onGenerateCoverLetter(job.description, job.id, docType)} />
           {job.applicationId && <OfferNotes applicationId={job.applicationId} initial={job.notes || ''} />}
-          {job.applicationId && <ContactsPanel applicationId={job.applicationId} />}
+          {job.applicationId && <ContactsPanel applicationId={job.applicationId}
+            onWrite={onWriteMessage ? (contactId) => onWriteMessage(job.id, contactId) : undefined} />}
         </div>
       </div>
 
@@ -356,7 +465,7 @@ function OfferNotes({ applicationId, initial }: { applicationId: string; initial
   );
 }
 
-function ContactsPanel({ applicationId }: { applicationId: string }) {
+function ContactsPanel({ applicationId, onWrite }: { applicationId: string; onWrite?: (contactId: string) => void }) {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ name: '', role: '', linkedin_url: '', notes: '' });
@@ -435,6 +544,9 @@ function ContactsPanel({ applicationId }: { applicationId: string }) {
               )}
               {c.notes && <p className="mt-1 text-xs text-zinc-500 whitespace-pre-wrap break-words">{c.notes}</p>}
               {c.reached_out && c.reached_at && <p className="mt-1 text-[11px] text-zinc-600">Reached {c.reached_at.slice(0, 10)}</p>}
+              {onWrite && (
+                <button onClick={() => onWrite(c.id)} className="mt-1 text-xs text-blue-400 hover:underline">Write message</button>
+              )}
             </div>
             <button onClick={() => remove(c)} aria-label={`Remove ${c.name}`} className="p-1 text-zinc-600 hover:text-red-400 rounded">
               <Trash2 className="w-3.5 h-3.5" />

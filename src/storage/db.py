@@ -77,6 +77,17 @@ def connect(url: str | None = None, schema: str | None = None) -> psycopg.Connec
     return conn
 
 
+POOL_TIMEOUT_S = 10            # a request waits this long for a free connection, then gets a 503
+IDLE_IN_TRANSACTION_S = 60     # Postgres ends an API transaction left open this long (e.g. code waiting on a model)
+
+
+def _configure_api_connection(conn: psycopg.Connection) -> None:
+    """New pooled connections: app schema, and a server-side guard against transactions left open.
+    (Not applied to CLI connections: `reindex` may legitimately keep one open while embedding.)"""
+    conn.execute(f"SET idle_in_transaction_session_timeout = '{IDLE_IN_TRANSACTION_S}s'")
+    _set_search_path(conn, settings.DB_SCHEMA)
+
+
 _pool = None
 _pool_lock = threading.Lock()  # the first requests arrive together, in different threads: create one pool only
 
@@ -91,7 +102,8 @@ def pool():
             _pool = ConnectionPool(
                 settings.DATABASE_URL, min_size=1, max_size=5, open=True,
                 kwargs={"row_factory": _row_factory, "prepare_threshold": None},
-                configure=lambda c: _set_search_path(c, settings.DB_SCHEMA),
+                configure=_configure_api_connection,
+                timeout=POOL_TIMEOUT_S,
             )
             atexit.register(close_pool)  # CLI/scripts: close before Python shuts its threads down
     return _pool
@@ -293,6 +305,19 @@ def update_offer(conn, user_id: str, offer_id: str, changes: Dict[str, Any], *, 
         log_event(conn, user_id, "offer.edited", actor=actor, offer_id=offer["id"],
                   application_id=offer["application_id"], payload={"fields": changed})
     return get_offer(conn, user_id, offer_id)
+
+
+def delete_offer(conn, user_id: str, offer_id: str) -> bool:
+    """Delete the offer with everything attached to it (application, contacts, documents, embedding, assistant
+    conversation: ON DELETE CASCADE). The history keeps an 'offer.deleted' event with the title."""
+    offer = get_offer(conn, user_id, offer_id)
+    if not offer:
+        return False
+    with conn.transaction():
+        log_event(conn, user_id, "offer.deleted", actor="user", offer_id=offer["id"],
+                  payload={"title": offer["title"], "company": offer["company"], "status": offer["status"]})
+        conn.execute("DELETE FROM offers WHERE id = %s AND user_id = %s", (offer["id"], user_id))
+    return True
 
 
 # --- search, filters, sort -------------------------------------------------------------------------------
@@ -518,6 +543,71 @@ def save_profile(conn, user_id: str, profile: Dict[str, Any], *, source_file: Op
             (user_id, Jsonb(profile), source_file, cv_file, cv_mime))
 
 
+MAX_INSTRUCTIONS_CHARS = 2000
+
+
+def get_instructions(conn, user_id: str) -> str:
+    """The user's personal instructions for generated documents ('' if never set)."""
+    row = conn.execute("SELECT instructions FROM preferences WHERE user_id = %s", (user_id,)).fetchone()
+    return row["instructions"] if row else ""
+
+
+def save_instructions(conn, user_id: str, instructions: str) -> str:
+    instructions = (instructions or "").strip()
+    if len(instructions) > MAX_INSTRUCTIONS_CHARS:
+        raise ValueError(f"Instructions are limited to {MAX_INSTRUCTIONS_CHARS} characters")
+    with conn.transaction():
+        conn.execute(
+            "INSERT INTO preferences (user_id, instructions) VALUES (%s, %s) "
+            "ON CONFLICT (user_id) DO UPDATE SET instructions = EXCLUDED.instructions, updated_at = now()",
+            (user_id, instructions))
+    return instructions
+
+
+DOC_TYPES = ("cover-letter", "cold-email", "interview")
+
+
+def add_document(conn, user_id: str, offer_id: str, doc_type: str, content: str, *, parent_id: Optional[str] = None,
+                 feedback: Optional[str] = None, settings: Dict[str, Any] | None = None, model: Optional[str] = None,
+                 prompt_version: Optional[str] = None, actor: str = "ai") -> Optional[Dict[str, Any]]:
+    """Save a new version of the offer's document of this type. None if the offer is not the user's."""
+    if doc_type not in DOC_TYPES:
+        raise ValueError(f"Unknown document type: {doc_type}")
+    if not (content or "").strip():
+        raise ValueError("Document is empty")
+    offer = get_offer(conn, user_id, offer_id)
+    if not offer:
+        return None
+    with conn.transaction():
+        # the lock serializes two saves of the same document, so versions stay 1, 2, 3...
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"{offer['id']}:{doc_type}",))
+        row = conn.execute(
+            "INSERT INTO documents (user_id, offer_id, doc_type, version, parent_id, content, feedback, settings, "
+            "model, prompt_version) VALUES (%s, %s, %s, (SELECT coalesce(max(version), 0) + 1 FROM documents "
+            "WHERE offer_id = %s AND doc_type = %s), %s, %s, %s, %s, %s, %s) RETURNING *",
+            (user_id, offer["id"], doc_type, offer["id"], doc_type, _id(parent_id), content.strip(), feedback,
+             Jsonb(settings or {}), model, prompt_version)).fetchone()
+        log_event(conn, user_id, "document.created", actor=actor, offer_id=offer["id"],
+                  application_id=offer["application_id"],
+                  payload={"document_id": row["id"], "doc_type": doc_type, "version": row["version"]})
+    return row
+
+
+def get_document(conn, user_id: str, document_id: str) -> Optional[Dict[str, Any]]:
+    did = _id(document_id)
+    return conn.execute("SELECT * FROM documents WHERE id = %s AND user_id = %s", (did, user_id)).fetchone() if did else None
+
+
+def list_documents(conn, user_id: str, offer_id: str, doc_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """All versions for an offer, newest first (optionally one document type)."""
+    sql_ = "SELECT * FROM documents WHERE user_id = %s AND offer_id = %s"
+    params: list = [user_id, _id(offer_id)]
+    if doc_type:
+        sql_ += " AND doc_type = %s"
+        params.append(doc_type)
+    return conn.execute(sql_ + " ORDER BY doc_type, version DESC", params).fetchall()
+
+
 def log_llm_call(conn, call: Dict[str, Any]) -> None:
     with conn.transaction():
         conn.execute(sql.SQL("INSERT INTO llm_calls ({}) VALUES ({})").format(
@@ -600,6 +690,40 @@ if __name__ == "__main__":
         save_profile(c, U, {"full_name": "B"})  # file kept
         assert get_profile(c, U)["profile"] == {"full_name": "B"} and get_cv_file(c, U)["cv_file"] == b"%PDF"
         assert get_profile(c, V) is None
+
+        # personal instructions: per user, upsert, trimmed, bounded
+        assert get_instructions(c, U) == ""
+        save_instructions(c, U, "  Sign as Ada. No buzzwords.  ")
+        save_instructions(c, U, "Sign as Ada.")
+        assert get_instructions(c, U) == "Sign as Ada." and get_instructions(c, V) == ""
+        raises(ValueError, lambda: save_instructions(c, U, "x" * (MAX_INSTRUCTIONS_CHARS + 1)))
+
+        # documents: versions per offer and type, revisions point at their parent, user-scoped
+        d1 = add_document(c, U, o["id"], "cover-letter", "Draft 1", settings={"tone": "formal"}, model="m")
+        d2 = add_document(c, U, o["id"], "cover-letter", "Draft 2", parent_id=d1["id"], feedback="shorter")
+        e1 = add_document(c, U, o["id"], "cold-email", "Email 1")
+        assert (d1["version"], d2["version"], e1["version"]) == (1, 2, 1)
+        assert d2["parent_id"] == d1["id"] and d1["settings"] == {"tone": "formal"}
+        assert [d["version"] for d in list_documents(c, U, o["id"], "cover-letter")] == [2, 1]
+        assert len(list_documents(c, U, o["id"])) == 3
+        raises(ValueError, lambda: add_document(c, U, o["id"], "poem", "x"))
+        raises(ValueError, lambda: add_document(c, U, o["id"], "cold-email", "  "))
+        assert add_document(c, V, o["id"], "cover-letter", "hijack") is None          # not V's offer
+        assert get_document(c, V, d1["id"]) is None and list_documents(c, V, o["id"]) == []
+        assert get_document(c, U, d1["id"])["content"] == "Draft 1"
+        assert c.execute("SELECT count(*) n FROM events WHERE type = 'document.created'").fetchone()["n"] == 3
+
+        # delete: only your own offer, with everything attached; the history keeps a note
+        add_contact(c, U, o["application_id"], {"name": "Kim"})
+        assert not delete_offer(c, V, o["id"]) and get_offer(c, U, o["id"])                # V can't delete U's offer
+        assert delete_offer(c, U, o["id"]) and get_offer(c, U, o["id"]) is None
+        assert not delete_offer(c, U, o["id"]) and not delete_offer(c, U, "not-a-uuid")
+        for table in ("applications", "contacts", "documents"):
+            n = c.execute(f"SELECT count(*) n FROM {table} WHERE user_id = %s", (U,)).fetchone()["n"]
+            assert n == 0, (table, n)
+        gone = c.execute("SELECT offer_id, payload FROM events WHERE type = 'offer.deleted'").fetchone()
+        assert gone["offer_id"] is None and gone["payload"]["title"] == "Data Eng"
+        assert get_offer(c, V, vo["id"])                                                    # V's offer untouched
 
     # --- edits, normalization, search, filters, views ---
     with temp_schema() as s:

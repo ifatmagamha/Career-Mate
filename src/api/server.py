@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from psycopg_pool import PoolTimeout
 from pydantic import BaseModel, Field, field_validator
 
 from src.api.auth import check_config, current_user
@@ -39,6 +41,13 @@ app.add_middleware(
 )
 
 User = Depends(current_user)  # every /api route below runs for the signed-in user only
+
+
+@app.exception_handler(PoolTimeout)
+async def database_busy(request, exc):
+    """All pooled connections stayed busy: a clear, retryable 503 (with CORS headers) instead of a crash."""
+    logger.error(f"[db] no free database connection for {request.method} {request.url.path}")
+    return JSONResponse(status_code=503, content={"detail": "The database is busy right now, please retry in a moment."})
 
 
 @app.get("/health")
@@ -102,24 +111,75 @@ def save_profile(profile_data: dict, uid: str = User):
     return {"status": "success", "message": "Profile updated successfully"}
 
 
+class PreferencesIn(BaseModel):
+    instructions: str = Field(default="", max_length=db.MAX_INSTRUCTIONS_CHARS)
+
+
+@app.get("/api/preferences")
+def get_preferences(uid: str = User):
+    with db.connection() as conn:
+        return {"instructions": db.get_instructions(conn, uid)}
+
+
+@app.put("/api/preferences")
+def put_preferences(req: PreferencesIn, uid: str = User):
+    with db.connection() as conn:
+        return {"instructions": db.save_instructions(conn, uid, req.instructions)}
+
+
+def _writer_offer(o: dict):
+    """A saved offer in the shape the writer expects (no extra model call: it is already structured)."""
+    from src.schemas.job_offer import OfferAnalyzed
+    return OfferAnalyzed(url=o["url"] or "https://internal.app", title=o["title"], company=o["company"],
+                         location=o["location"], skills=o["skills"], missions=o["missions"],
+                         requirements=o["requirements"], summary=o["summary"])
+
+
 @app.post("/api/generate")
 def generate_content(payload: dict, uid: str = User):
-    """Tailored content (cover letter, cold email, interview prep): analyze the job text, then write from the profile."""
+    """Tailored content (cover letter, cold email, interview prep), written from the profile.
+
+    With `offer_id`: written for that saved offer and stored on it as a new version (returned as `document`).
+    Otherwise from a pasted `job_description`, analyzed first, and not stored.
+    `instructions` overrides the saved personal instructions for this generation only.
+    """
     from src.agents.analyzer import analyze_offer_llm, heuristic_analyze_offer
-    from src.agents.writer import generate_documents
+    from src.agents.writer import DOC_TYPES, generate_documents
     from src.ingestion.resume_parser import load_saved_profile
+    from src.llm.port import llm, prompt_version
     from src.schemas.job_offer import OfferRaw
+    from src.utils.prompts import load_prompt
 
     doc_type = payload.get("type", "cover-letter")
     raw_jd = payload.get("job_description", "")
     extra = payload.get("extra", "professional")
-    if not raw_jd:
+    offer_id = payload.get("offer_id")
+    if doc_type not in DOC_TYPES:
+        raise HTTPException(status_code=422, detail=f"type must be one of {', '.join(DOC_TYPES)}")
+    if not raw_jd and not offer_id:
         raise HTTPException(status_code=400, detail="Job description required.")
 
     with db.connection() as conn:
         candidate = load_saved_profile(conn, uid)
+        instructions = payload.get("instructions")
+        if instructions is None:
+            instructions = db.get_instructions(conn, uid)
+        offer = db.get_offer(conn, uid, offer_id) if offer_id else None
+    instructions = str(instructions)[:db.MAX_INSTRUCTIONS_CHARS]
     if not candidate:
         raise HTTPException(status_code=400, detail="No profile found. Please upload a CV first.")
+
+    if offer_id:
+        if not offer:
+            raise HTTPException(status_code=404, detail="Offer not found")
+        content = generate_documents(candidate, _writer_offer(offer), doc_type=doc_type, extra=extra,
+                                     instructions=instructions)
+        template = {"cover-letter": "writer_letter", "cold-email": "writer_email", "interview": "writer_interview"}[doc_type]
+        with db.connection() as conn:
+            document = db.add_document(conn, uid, offer["id"], doc_type, content,
+                                       settings={"extra": extra, "instructions": instructions},
+                                       model=llm.config("write").model, prompt_version=prompt_version(load_prompt(template)))
+        return {"status": "success", "content": content, "document": document}
 
     # Use the first line as the title if it is short
     initial_title = "Target Position"
@@ -137,7 +197,57 @@ def generate_content(payload: dict, uid: str = User):
         logger.warning(f"Generator flow: LLM analysis failed, falling back to heuristic. Error: {e}")
         analyzed_offer = heuristic_analyze_offer(temp_offer)
 
-    return {"status": "success", "content": generate_documents(candidate, analyzed_offer, doc_type=doc_type, extra=extra)}
+    return {"status": "success", "content": generate_documents(candidate, analyzed_offer, doc_type=doc_type, extra=extra,
+                                                               instructions=instructions)}
+
+
+@app.get("/api/offers/{offer_id}/documents")
+def get_documents(offer_id: str, type: Optional[str] = None, uid: str = User):
+    """Every saved version for the offer, newest first."""
+    with db.connection() as conn:
+        if not db.get_offer(conn, uid, offer_id):
+            raise HTTPException(status_code=404, detail="Offer not found")
+        return db.list_documents(conn, uid, offer_id, type)
+
+
+class RevisionIn(BaseModel):
+    """Either `feedback` (the AI rewrites the document) or `content` (your own edit), saved as a new version."""
+    feedback: Optional[str] = Field(default=None, max_length=2000)
+    content: Optional[str] = Field(default=None, max_length=50000)
+
+
+@app.post("/api/documents/{document_id}/revise", status_code=201)
+def revise(document_id: str, req: RevisionIn, uid: str = User):
+    from src.agents.writer import revise_document
+    from src.ingestion.resume_parser import load_saved_profile
+    from src.llm.port import LLMError, llm, prompt_version
+    from src.utils.prompts import load_prompt
+
+    feedback, content = (req.feedback or "").strip(), (req.content or "").strip()
+    if bool(feedback) == bool(content):
+        raise HTTPException(status_code=422, detail="Send either feedback or content")
+    with db.connection() as conn:
+        current = db.get_document(conn, uid, document_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="Document not found")
+        offer = db.get_offer(conn, uid, current["offer_id"])
+        candidate = load_saved_profile(conn, uid) if feedback else None
+        instructions = db.get_instructions(conn, uid)
+
+    settings, model, version = {**current["settings"], "instructions": instructions}, None, None
+    if feedback:
+        if not candidate:
+            raise HTTPException(status_code=400, detail="No profile found. Please upload a CV first.")
+        try:  # the model call happens without holding a DB connection
+            content = revise_document(candidate, _writer_offer(offer), current["doc_type"], current["content"],
+                                      feedback, instructions)
+        except (LLMError, ValueError) as e:  # nothing is saved when the model fails
+            raise HTTPException(status_code=503, detail=f"Could not revise the document: {str(e)[:200]}")
+        model, version = llm.config("write").model, prompt_version(load_prompt("writer_revise"))
+    with db.connection() as conn:
+        return db.add_document(conn, uid, current["offer_id"], current["doc_type"], content, parent_id=current["id"],
+                               feedback=feedback or "Edited by hand", settings=settings, model=model,
+                               prompt_version=version, actor="ai" if feedback else "user")
 
 
 # --- Applications ---
@@ -235,11 +345,11 @@ def get_offers(
     from src.storage.offer_search import MODES, search_offers
     if mode not in MODES:
         raise HTTPException(status_code=422, detail=f"mode must be one of {', '.join(MODES)}")
-    with db.connection() as conn:
-        offers, used = search_offers(conn, uid, {
-            "q": q, "status": status, "folder": folder, "contract_type": contract_type,
-            "remote_policy": remote_policy, "deadline_before": deadline_before, "sort": sort,
-        }, mode=mode)
+    # search_offers opens short connections itself, and none while the embedding provider is called
+    offers, used = search_offers(db.connection, uid, {
+        "q": q, "status": status, "folder": folder, "contract_type": contract_type,
+        "remote_policy": remote_policy, "deadline_before": deadline_before, "sort": sort,
+    }, mode=mode)
     response.headers["X-Search-Mode"] = used  # e.g. "keyword (semantic unavailable)" when embeddings fail
     return offers
 
@@ -253,11 +363,10 @@ def interpret_query(req: InterpretRequest, uid: str = User):
     """Natural-language search -> {q, filters, folder_id, deadline_before, sort, applied}. The UI applies it as filters."""
     from src.agents.query_interpreter import interpret
     from src.llm.port import LLMError
-    with db.connection() as conn:
-        try:
-            return interpret(conn, uid, req.text)
-        except LLMError as e:  # quota, missing key, invalid output: the user can still search by keywords
-            raise HTTPException(status_code=503, detail=f"Could not interpret the request: {str(e)[:200]}")
+    try:  # interpret reads the folders, then calls the model with no DB connection held
+        return interpret(db.connection, uid, req.text)
+    except LLMError as e:  # quota, missing key, invalid output: the user can still search by keywords
+        raise HTTPException(status_code=503, detail=f"Could not interpret the request: {str(e)[:200]}")
 
 
 @app.get("/api/offer-facets")
@@ -401,6 +510,14 @@ def patch_offer(offer_id: str, req: OfferPatch, uid: str = User):
     return offer
 
 
+@app.delete("/api/offers/{offer_id}", status_code=204)
+def remove_offer(offer_id: str, uid: str = User):
+    """Deletes the offer and everything attached to it (contacts, documents, assistant conversation)."""
+    with db.connection() as conn:
+        if not db.delete_offer(conn, uid, offer_id):
+            raise HTTPException(status_code=404, detail="Offer not found")
+
+
 class ViewIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     filters: dict = {}
@@ -532,3 +649,409 @@ def remove_contact(contact_id: str, uid: str = User):
     with db.connection() as conn:
         if not db.delete_contact(conn, uid, contact_id):
             raise HTTPException(status_code=404, detail="Contact not found")
+
+
+# --- Assistant (pop-up chat about an offer or the profile) ---
+
+class AssistantMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    attachments: List[str] = Field(default=[], max_length=3)  # ids of saved documents
+
+
+@app.get("/api/assistant/conversation")
+def get_assistant_conversation(offer_id: Optional[str] = None, uid: str = User):
+    """Open (or create) the conversation for an offer, or the profile one without offer_id, with its history."""
+    from src.agents import assistant
+    with db.connection() as conn:
+        conv = assistant.get_or_create_conversation(conn, uid, offer_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail="Offer not found")
+        return {"conversation": conv, "messages": assistant.list_messages(conn, uid, conv["id"]),
+                "actions": assistant.list_actions(conn, uid, conv["id"])}
+
+
+@app.post("/api/assistant/conversations/{conversation_id}/messages")
+def post_assistant_message(conversation_id: str, req: AssistantMessageIn, uid: str = User):
+    from src.agents import assistant
+    from src.llm.port import LLMError
+    try:
+        out = assistant.run_turn(uid, conversation_id, req.text, req.attachments)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except LLMError as e:  # quota, provider down: the question is saved, the user can retry
+        raise HTTPException(status_code=503, detail=f"The assistant is unavailable right now: {str(e)[:200]}")
+    if out is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return out
+
+
+@app.delete("/api/assistant/conversations/{conversation_id}/messages", status_code=204)
+def clear_assistant_conversation(conversation_id: str, uid: str = User):
+    from src.agents import assistant
+    with db.connection() as conn:
+        if not assistant.clear_conversation(conn, uid, conversation_id):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+
+class ActionDecisionIn(BaseModel):
+    confirm: bool
+
+
+@app.post("/api/assistant/actions/{action_id}")
+def decide_assistant_action(action_id: str, req: ActionDecisionIn, uid: str = User):
+    """Apply (confirm) or cancel a change the assistant proposed."""
+    from src.agents import assistant
+    with db.connection() as conn:
+        try:
+            action = assistant.decide_action(conn, uid, action_id, req.confirm)
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        if not action:
+            raise HTTPException(status_code=404, detail="Action not found")
+        return {"action": action, "messages": assistant.list_messages(conn, uid, action["conversation_id"])}
+
+
+# --- Company directory ---
+
+class LinkIn(BaseModel):
+    label: str = Field(default="", max_length=80)
+    url: str = Field(max_length=2000)
+
+
+class CompanyIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    website: Optional[str] = Field(default=None, max_length=2000)
+    links: List[LinkIn] = []
+    notes: str = Field(default="", max_length=20000)
+
+
+class CompanyPatch(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    website: Optional[str] = Field(default=None, max_length=2000)
+    links: Optional[List[LinkIn]] = None
+
+
+class NoteIn(BaseModel):
+    body: str = Field(min_length=1, max_length=5000)
+    flag: Optional[str] = None      # important | follow-up | question | risk
+    pinned: bool = False
+
+
+class NotePatch(BaseModel):
+    body: Optional[str] = Field(default=None, min_length=1, max_length=5000)
+    flag: Optional[str] = None      # send null to remove the flag
+    pinned: Optional[bool] = None
+
+
+class TodoIn(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    due_date: Optional[str] = None
+
+
+class TodoPatch(BaseModel):
+    text: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    done: Optional[bool] = None
+    due_date: Optional[str] = None
+
+
+@app.get("/api/companies")
+def get_companies(uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        return companies.list_companies(conn, uid)
+
+
+@app.get("/api/companies/by-name")
+def get_company_by_name(name: str, uid: str = User):
+    """The company file for an offer's company name, or 404 if you have none yet."""
+    from src.storage import companies
+    with db.connection() as conn:
+        c = companies.find_company(conn, uid, name)
+    if not c:
+        raise HTTPException(status_code=404, detail="No company file with this name")
+    return c
+
+
+@app.post("/api/companies", status_code=201)
+def post_company(req: CompanyIn, uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        try:
+            return companies.create_company(conn, uid, req.model_dump())
+        except db.IntegrityError:
+            raise HTTPException(status_code=409, detail="You already have a company with this name")
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/api/companies/{company_id}")
+def get_company(company_id: str, uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        c = companies.get_company(conn, uid, company_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return c
+
+
+@app.patch("/api/companies/{company_id}")
+def patch_company(company_id: str, req: CompanyPatch, uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        try:
+            c = companies.update_company(conn, uid, company_id, req.model_dump(exclude_unset=True))
+        except db.IntegrityError:
+            raise HTTPException(status_code=409, detail="You already have a company with this name")
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    if not c:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return c
+
+
+@app.delete("/api/companies/{company_id}", status_code=204)
+def remove_company(company_id: str, uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        if not companies.delete_company(conn, uid, company_id):
+            raise HTTPException(status_code=404, detail="Company not found")
+
+
+@app.post("/api/companies/{company_id}/todos", status_code=201)
+def post_todo(company_id: str, req: TodoIn, uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        try:
+            todo = companies.add_todo(conn, uid, company_id, req.model_dump(exclude_unset=True))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    if not todo:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return todo
+
+
+@app.patch("/api/todos/{todo_id}")
+def patch_todo(todo_id: str, req: TodoPatch, uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        try:
+            todo = companies.update_todo(conn, uid, todo_id, req.model_dump(exclude_unset=True))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    if not todo:
+        raise HTTPException(status_code=404, detail="To-do not found")
+    return todo
+
+
+@app.delete("/api/todos/{todo_id}", status_code=204)
+def remove_todo(todo_id: str, uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        if not companies.delete_todo(conn, uid, todo_id):
+            raise HTTPException(status_code=404, detail="To-do not found")
+
+
+@app.post("/api/companies/{company_id}/notes", status_code=201)
+def post_company_note(company_id: str, req: NoteIn, uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        try:
+            note = companies.add_note(conn, uid, company_id, req.model_dump())
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    if not note:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return note
+
+
+@app.patch("/api/company-notes/{note_id}")
+def patch_company_note(note_id: str, req: NotePatch, uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        try:
+            note = companies.update_note(conn, uid, note_id, req.model_dump(exclude_unset=True))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return note
+
+
+@app.delete("/api/company-notes/{note_id}", status_code=204)
+def remove_company_note(note_id: str, uid: str = User):
+    from src.storage import companies
+    with db.connection() as conn:
+        if not companies.delete_note(conn, uid, note_id):
+            raise HTTPException(status_code=404, detail="Note not found")
+
+
+# --- Outreach messages: categories, reference library, drafts ---
+
+class CategoryIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class TemplateIn(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    body: str = Field(min_length=1, max_length=20000)
+    channel: str = "linkedin-message"
+    category_id: Optional[str] = None
+    pinned: bool = False
+    # Pinning a draft written for an offer/contact: turn their names back into placeholders
+    generalize_offer_id: Optional[str] = None
+    generalize_contact_id: Optional[str] = None
+
+
+class TemplatePatch(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    body: Optional[str] = Field(default=None, min_length=1, max_length=20000)
+    channel: Optional[str] = None
+    category_id: Optional[str] = None
+    pinned: Optional[bool] = None
+
+
+class RenderIn(BaseModel):
+    body: str = Field(max_length=20000)
+    offer_id: Optional[str] = None
+    contact_id: Optional[str] = None
+
+
+class OutreachIn(BaseModel):
+    body: str = Field(min_length=1, max_length=20000)
+    channel: str = "linkedin-message"
+    category_id: Optional[str] = None
+    template_id: Optional[str] = None
+    offer_id: Optional[str] = None
+    contact_id: Optional[str] = None
+
+
+class OutreachPatch(BaseModel):
+    body: Optional[str] = Field(default=None, min_length=1, max_length=20000)
+    channel: Optional[str] = None
+    category_id: Optional[str] = None
+    offer_id: Optional[str] = None
+    contact_id: Optional[str] = None
+    status: Optional[str] = None   # draft | sent
+
+
+def _outreach_call(fn, *args, not_found: str = "Not found"):
+    """Run an outreach storage call: 422 on invalid input, 409 on a duplicate name, 404 when it isn't yours."""
+    with db.connection() as conn:
+        try:
+            result = fn(conn, *args)
+        except db.IntegrityError:
+            raise HTTPException(status_code=409, detail="A category with this name already exists")
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    if result is None or result is False:
+        raise HTTPException(status_code=404, detail=not_found)
+    return result
+
+
+@app.get("/api/outreach/categories")
+def get_message_categories(uid: str = User):
+    from src.storage import outreach
+    return _outreach_call(outreach.list_categories, uid)
+
+
+@app.post("/api/outreach/categories", status_code=201)
+def post_message_category(req: CategoryIn, uid: str = User):
+    from src.storage import outreach
+    return _outreach_call(outreach.create_category, uid, req.name)
+
+
+@app.patch("/api/outreach/categories/{category_id}")
+def patch_message_category(category_id: str, req: CategoryIn, uid: str = User):
+    from src.storage import outreach
+    return _outreach_call(outreach.rename_category, uid, category_id, req.name, not_found="Category not found")
+
+
+@app.delete("/api/outreach/categories/{category_id}", status_code=204)
+def remove_message_category(category_id: str, uid: str = User):
+    from src.storage import outreach
+    _outreach_call(outreach.delete_category, uid, category_id, not_found="Category not found")
+
+
+@app.get("/api/outreach/templates")
+def get_message_templates(category_id: Optional[str] = None, uid: str = User):
+    from src.storage import outreach
+    return _outreach_call(outreach.list_templates, uid, category_id)
+
+
+@app.post("/api/outreach/templates", status_code=201)
+def post_message_template(req: TemplateIn, uid: str = User):
+    from src.storage import outreach
+    data = req.model_dump(exclude={"generalize_offer_id", "generalize_contact_id"})
+    if req.generalize_offer_id or req.generalize_contact_id:
+        with db.connection() as conn:
+            values = outreach.placeholder_values(conn, uid, req.generalize_offer_id, req.generalize_contact_id)
+        data["body"] = outreach.generalize(data["body"], values)
+    return _outreach_call(outreach.create_template, uid, data)
+
+
+@app.patch("/api/outreach/templates/{template_id}")
+def patch_message_template(template_id: str, req: TemplatePatch, uid: str = User):
+    from src.storage import outreach
+    return _outreach_call(outreach.update_template, uid, template_id, req.model_dump(exclude_unset=True),
+                          not_found="Reference message not found")
+
+
+@app.delete("/api/outreach/templates/{template_id}", status_code=204)
+def remove_message_template(template_id: str, uid: str = User):
+    from src.storage import outreach
+    _outreach_call(outreach.delete_template, uid, template_id, not_found="Reference message not found")
+
+
+@app.post("/api/outreach/render")
+def render_message(req: RenderIn, uid: str = User):
+    """Fill the placeholders of a text for an offer and contact: {body, missing, values}."""
+    from src.storage import outreach
+    with db.connection() as conn:
+        values = outreach.placeholder_values(conn, uid, req.offer_id, req.contact_id)
+    return {**outreach.fill(req.body, values), "values": values}
+
+
+@app.get("/api/outreach/messages")
+def get_outreach_messages(status: Optional[str] = None, uid: str = User):
+    from src.storage import outreach
+    return _outreach_call(outreach.list_messages, uid, status)
+
+
+@app.post("/api/outreach/messages", status_code=201)
+def post_outreach_message(req: OutreachIn, uid: str = User):
+    from src.storage import outreach
+    return _outreach_call(outreach.create_message, uid, req.model_dump())
+
+
+@app.patch("/api/outreach/messages/{message_id}")
+def patch_outreach_message(message_id: str, req: OutreachPatch, uid: str = User):
+    from src.storage import outreach
+    return _outreach_call(outreach.update_message, uid, message_id, req.model_dump(exclude_unset=True),
+                          not_found="Message not found")
+
+
+@app.delete("/api/outreach/messages/{message_id}", status_code=204)
+def remove_outreach_message(message_id: str, uid: str = User):
+    from src.storage import outreach
+    _outreach_call(outreach.delete_message, uid, message_id, not_found="Message not found")
+
+
+class AdaptIn(BaseModel):
+    body: str = Field(min_length=1, max_length=20000)
+    channel: str = "linkedin-message"
+    offer_id: Optional[str] = None
+    contact_id: Optional[str] = None
+    extra: str = Field(default="", max_length=500)   # e.g. "mention their dbt talk", "more formal"
+
+
+@app.post("/api/outreach/adapt")
+def adapt_message(req: AdaptIn, uid: str = User):
+    """Personalize a message with AI for an offer and contact. Not saved: the user reviews it first."""
+    from src.agents.outreach_writer import adapt
+    from src.llm.port import LLMError
+    try:
+        return adapt(uid, req.body, req.channel, req.offer_id, req.contact_id, req.extra)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except LLMError as e:
+        raise HTTPException(status_code=503, detail=f"The AI is unavailable right now: {str(e)[:200]}")

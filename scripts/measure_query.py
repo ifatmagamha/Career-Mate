@@ -7,6 +7,7 @@ Re-run after changing the query model or the interpreter prompt.
 """
 import sys
 import uuid
+from contextlib import nullcontext
 import time
 from datetime import date
 
@@ -37,7 +38,7 @@ with db.temp_schema() as conn:
     exact, tp, fp, fn, q_ok, latencies = 0, 0, 0, 0, 0, []
     for text, expected, must, must_not in CASES:
         t0 = time.monotonic()
-        plan = interpret(conn, U, text, today=TODAY)
+        plan = interpret(lambda: nullcontext(conn), U, text, today=TODAY)
         latencies.append(time.monotonic() - t0)
         got = {k: v[0] for k, v in plan["filters"].items()}
         if plan["folder_id"]:

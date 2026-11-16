@@ -47,10 +47,10 @@ Request: {text}
 """
 
 
-def _schema(conn, user_id: str) -> Dict[str, Tuple[str, ...]]:
+def _schema(folder_list: List[Dict[str, Any]]) -> Dict[str, Tuple[str, ...]]:
     """Every field the plan may set, with its allowed values ('' = free text)."""
     fields: Dict[str, Tuple[str, ...]] = {k: values for k, (_, values) in db.ENUM_FILTERS.items()}
-    folders = tuple(f["name"] for f in db.list_folders(conn, user_id))
+    folders = tuple(f["name"] for f in folder_list)
     if folders:
         fields["folder"] = folders
     fields["sort"] = tuple(s for s in db.SORTS if s != "relevance")
@@ -87,16 +87,20 @@ def _cached(text: str, fields_json: str, today: str, structured: Callable) -> st
     return structured(prompt, _plan_model(fields)).model_dump_json()
 
 
-def interpret(conn, user_id: str, text: str, *, today: Optional[date] = None,
+def interpret(connection: Callable, user_id: str, text: str, *, today: Optional[date] = None,
               structured: Callable = _default_structured) -> Dict[str, Any]:
-    """Returns {"q", "filters": {field: [value]}, "folder_id", "deadline_before", "sort", "applied": [labels]}."""
-    fields = _schema(conn, user_id)
+    """Returns {"q", "filters": {field: [value]}, "folder_id", "deadline_before", "sort", "applied": [labels]}.
+
+    `connection` opens a short DB connection, used only to read the folders: none is held during the model call."""
+    with connection() as conn:
+        folder_list = db.list_folders(conn, user_id)
+    fields = _schema(folder_list)
     raw = json.loads(_cached(text.strip(), json.dumps(fields), (today or date.today()).isoformat(), structured))
 
     filters = {k: [raw[k]] for k in db.ENUM_FILTERS if raw.get(k)}
     folder_id = None
     if raw.get("folder"):
-        folder_id = next((f["id"] for f in db.list_folders(conn, user_id) if f["name"].casefold() == raw["folder"].casefold()), None)
+        folder_id = next((f["id"] for f in folder_list if f["name"].casefold() == raw["folder"].casefold()), None)
     deadline = raw.get("deadline_before")
     try:
         deadline = date.fromisoformat(deadline).isoformat() if deadline else None
@@ -117,6 +121,7 @@ def interpret(conn, user_id: str, text: str, *, today: Optional[date] = None,
 
 if __name__ == "__main__":
     import uuid
+    from contextlib import nullcontext
 
     U = str(uuid.uuid4())
     seen = {}
@@ -128,7 +133,7 @@ if __name__ == "__main__":
 
     with db.temp_schema() as c:
         db.create_folder(c, U, "Data roles")
-        plan = interpret(c, U, "remote data internships in my Data roles folder, closing this month, soonest first",
+        plan = interpret(lambda: nullcontext(c), U, "remote data internships in my Data roles folder, closing this month, soonest first",
                          today=date(2026, 11, 4), structured=fake)
         assert plan["q"] == "data" and plan["filters"] == {"contract_type": ["internship"], "remote_policy": ["remote"]}
         assert plan["folder_id"] and plan["deadline_before"] == "2026-11-30" and plan["sort"] == "deadline"
@@ -138,7 +143,7 @@ if __name__ == "__main__":
         assert '"internship" (stage, internship)' in seen["prompt"]
 
         # invalid values never reach the search: the schema rejects them
-        Plan = _plan_model(_schema(c, U))
+        Plan = _plan_model(_schema(db.list_folders(c, U)))
         try:
             Plan.model_validate({"contract_type": "CDI"})
             raise AssertionError("expected a validation error")
@@ -148,7 +153,7 @@ if __name__ == "__main__":
         def bad_date(prompt, schema):
             return schema.model_validate({"q": "x", "deadline_before": "end of month"})
         _cached.cache_clear()
-        assert interpret(c, U, "x", structured=bad_date)["deadline_before"] is None  # unusable date dropped
+        assert interpret(lambda: nullcontext(c), U, "x", structured=bad_date)["deadline_before"] is None  # unusable date dropped
 
         calls = []
 
@@ -156,7 +161,7 @@ if __name__ == "__main__":
             calls.append(1)
             return schema.model_validate({"q": "sales"})
         _cached.cache_clear()
-        interpret(c, U, "sales jobs", structured=counting)
-        interpret(c, U, "sales jobs", structured=counting)
+        interpret(lambda: nullcontext(c), U, "sales jobs", structured=counting)
+        interpret(lambda: nullcontext(c), U, "sales jobs", structured=counting)
         assert len(calls) == 1  # same request, same schema, same day: answered from cache
     print("query_interpreter ok")

@@ -422,8 +422,11 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
     </button>
   );
 
-  const OfferCard = ({ job, compact = false }: { job: Job; compact?: boolean }) => (
+  // A plain function, not a component: a component defined inside this one would be a new type on every render,
+  // so React would rebuild the card mid-drag (e.g. when a column highlights) and the browser would cancel the drop.
+  const offerCard = (job: Job, compact = false) => (
     <div
+      key={job.id}
       {...dragProps(job)}
       onClick={() => onJobSelect(job)}
       className={`bg-zinc-900 border border-zinc-800 rounded-xl ${compact ? 'p-3' : 'p-5'} hover:border-blue-500/30 hover:bg-zinc-800/50 transition-all cursor-pointer active:cursor-grabbing group`}
@@ -754,7 +757,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
             </div>
           ) : layout === 'grid' ? (
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-              {jobs.map((job) => <OfferCard key={job.id} job={job} />)}
+              {jobs.map((job) => offerCard(job))}
             </div>
           ) : layout === 'table' ? (
             <div className="overflow-x-auto border border-zinc-800 rounded-xl">
@@ -793,7 +796,11 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
                     <section
                       key={s}
                       aria-label={`${label(s)} column`}
-                      {...dropOn(`status:${s}`, (id) => patchApplication(id, { stage: s }))}
+                      {...dropOn(`status:${s}`, (id) => {
+                        // move the card at once; the refresh after the save confirms it (or puts it back on error)
+                        setJobs((all) => all.map((j) => (j.applicationId === id ? { ...j, status: s } : j)));
+                        return patchApplication(id, { stage: s });
+                      })}
                       className={`w-60 shrink-0 rounded-xl p-2 flex flex-col gap-2 transition-colors ${
                         dropTarget === `status:${s}` ? 'bg-blue-600/10 ring-1 ring-blue-500' : 'bg-zinc-950 border border-zinc-900'
                       }`}
@@ -801,7 +808,7 @@ export function JobExplorer({ onJobSelect }: JobExplorerProps) {
                       <h3 className="px-1 pt-1 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-zinc-500">
                         {label(s)} <span className="tabular-nums">{col.length}</span>
                       </h3>
-                      {col.map((job) => <OfferCard key={job.id} job={job} compact />)}
+                      {col.map((job) => offerCard(job, true))}
                     </section>
                   );
                 })}
